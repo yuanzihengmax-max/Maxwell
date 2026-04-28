@@ -1,0 +1,17 @@
+# Web框架
+streamlit>=1.30.0
+
+# PDF解析
+pdfplumber>=0.10.0
+PyPDF2>=3.0.0
+
+# Excel处理
+openpyxl>=3.1.0
+pandas>=2.0.0
+
+# 数据处理
+python-dateutil>=2.8.0
+
+# AI接口（任选其一）
+openai>=1.0.0          # OpenAI API
+dashscope>=1.14.0      # 阿里云通义千问

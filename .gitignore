@@ -1,0 +1,31 @@
+# Streamlit secrets（本地开发时如有）
+.streamlit/secrets.toml
+
+# 本地数据（Cloud 上不会持久化，生产环境建议迁移到云数据库）
+data/
+
+# 本地配置（含敏感信息）
+ai_config.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+venv/
+.venv/
+
+# macOS
+.DS_Store
+
+# 桌面打包产物（v4 为线上版，不需要）
+dist/
+build/
+*.spec
+launcher.py
+build.py
+
+# IDE
+.idea/
+.vscode/

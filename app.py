@@ -1,0 +1,1627 @@
+"""
+招聘助手 —— Streamlit 主界面
+=============================
+这是整个应用的"门面"，把所有模块串在一起，做成一个漂亮的网页。
+
+设计美学：
+- 方向：Moss Garden（苔藓庭院）
+- 颜色：雨后苔藓底 + 陈年宣纸卡片 + 赭石色强调
+- 布局：编辑风格，药丸标签，纸质卡片
+- 风格：静谧、有生命力、经得起细品
+"""
+
+import os
+import tempfile
+from datetime import datetime
+from typing import List, Dict
+
+import re
+import streamlit as st
+
+from config import CHANNELS, SCORING_DIMENSIONS, AI_CONFIG, validate_ai_config, get_ai_config, save_user_config, clear_user_config
+from modules.pdf_parser import PDFParser
+from modules.ai_analyzer import AIAnalyzer
+from modules.database import Database
+from modules.excel_exporter import ExcelExporter
+
+
+# ========== 自定义 CSS 样式 ==========
+# 通过注入 CSS，把 Streamlit 默认的朴素样式改成我们想要的精致风格
+CUSTOM_CSS = """
+<style>
+/* ===== 1. Font Imports ===== */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&family=Noto+Sans+SC:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* ===== 2. CSS Variables ===== */
+:root {
+    --bg-primary: #15251A;
+    --bg-card: #F5F0E8;
+    --bg-elevated: #EDE8DE;
+    --bg-dark: #0F1E15;
+    --text-primary: #1A2E22;
+    --text-secondary: #5A7A65;
+    --text-muted: #6B8A72;
+    --text-inverse: #F5F0E8;
+    --accent: #B87A4A;
+    --accent-hover: #A0683E;
+    --accent-light: #F0E6D8;
+    --accent-glow: rgba(184, 122, 74, 0.15);
+    --success: #4A7C59;
+    --success-light: #E4EDE6;
+    --danger: #A84A4A;
+    --danger-light: #F2E4E4;
+    --warning: #B8922A;
+    --warning-light: #F2EBD4;
+    --info: #4A7A8A;
+    --info-light: #E4ECEF;
+    --border-light: #DDD8CE;
+    --border-medium: #B8B2A6;
+    --shadow-sm: 0 1px 2px rgba(15, 30, 21, 0.06);
+    --shadow-md: 0 4px 12px rgba(15, 30, 21, 0.08);
+    --shadow-lg: 0 12px 32px rgba(15, 30, 21, 0.10);
+}
+
+/* ===== 3. Global Base ===== */
+.stApp {
+    background-color: var(--bg-primary) !important;
+    font-family: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    color: var(--text-inverse);
+}
+
+/* Paper grain texture overlay */
+.stApp::before {
+    content: "";
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+    opacity: 0.03;
+    pointer-events: none;
+    z-index: 9999;
+}
+
+/* Hide default Streamlit header */
+header[data-testid="stHeader"] {
+    display: none !important;
+}
+
+/* Fix: Streamlit dataframe (glide-data-grid) uses icon ligatures in its context menu.
+   Our CJK font breaks these ligatures, causing text overlap.
+   Force system font stack inside the dataframe. */
+.gdg-style, .gdg-style *, [class*="gdg-"], [class*="gdg-"] *,
+[data-testid="stDataFrame"], [data-testid="stDataFrame"] *,
+[data-testid="stDataFrameResizable"] *, [data-testid="data-grid-canvas"] * {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji' !important;
+}
+
+/* Main content width */
+.block-container {
+    max-width: 1100px;
+    padding-top: 2rem;
+    padding-bottom: 4rem;
+}
+
+/* ===== 4. Typography ===== */
+/* Default: light text for dark page background */
+h1, h2, h3, h4 {
+    font-family: 'Noto Serif SC', 'Songti SC', 'STSong', serif !important;
+    color: var(--text-inverse) !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.02em !important;
+}
+
+/* Inside light cards: dark text */
+[data-testid="stVerticalBlockBorderWrapper"] h1,
+[data-testid="stVerticalBlockBorderWrapper"] h2,
+[data-testid="stVerticalBlockBorderWrapper"] h3,
+[data-testid="stVerticalBlockBorderWrapper"] h4,
+.stFileUploader h1, .stFileUploader h2, .stFileUploader h3, .stFileUploader h4 {
+    color: var(--text-primary) !important;
+}
+
+h1 {
+    font-size: 2.8rem !important;
+    line-height: 1.2 !important;
+    margin-bottom: 0.5rem !important;
+}
+
+h2 {
+    font-size: 1.6rem !important;
+    font-weight: 600 !important;
+    margin-top: 2rem !important;
+    margin-bottom: 1rem !important;
+}
+
+h3 {
+    font-size: 1.2rem !important;
+    font-weight: 600 !important;
+    margin-top: 1.5rem !important;
+}
+
+h4 {
+    font-family: 'Noto Serif SC', 'Songti SC', 'STSong', serif !important;
+    color: var(--text-inverse) !important;
+    font-size: 1.05rem !important;
+    font-weight: 600 !important;
+    margin-top: 1.2rem !important;
+    margin-bottom: 0.75rem !important;
+    letter-spacing: 0.01em !important;
+}
+
+/* Safe font override: only target visible user content.
+   NEVER use !important on bare tags (p, div, span…) — that breaks
+   Streamlit internal icon fonts (glide-data-grid, expander icons). */
+.stMarkdown, .stMarkdown p, .stMarkdown span, .stMarkdown li,
+.stCaption, .stCaption span,
+.stWrite, .stWrite p, .stWrite span,
+.stAlert, .stAlert p, .stAlert span, .stAlert strong,
+[data-testid="stMetric"] > div {
+    font-family: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    line-height: 1.6;
+}
+
+/* Title rule — gold accent line */
+.title-rule {
+    width: 48px;
+    height: 3px;
+    background-color: var(--accent);
+    margin: 0.75rem 0 1.5rem 0;
+}
+
+.subtitle {
+    font-family: 'Noto Sans SC', 'PingFang SC', sans-serif !important;
+    color: var(--text-secondary) !important;
+    font-size: 0.95rem !important;
+    letter-spacing: 0.04em !important;
+    margin-top: 1.2rem !important;
+}
+
+/* ===== 5. Tab Navigation — Pill Style ===== */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 12px;
+    background: transparent;
+    border-bottom: none !important;
+    padding-bottom: 8px;
+    margin-bottom: 2rem;
+}
+
+.stTabs [data-baseweb="tab"] {
+    background: transparent;
+    border: 1.5px solid rgba(184, 122, 74, 0.3);
+    border-radius: 100px;
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 0.9rem;
+    padding: 8px 24px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    font-family: 'Noto Sans SC', 'PingFang SC', sans-serif !important;
+}
+
+.stTabs [data-baseweb="tab"]:hover {
+    color: var(--text-inverse);
+    border-color: var(--accent);
+    background: rgba(184, 122, 74, 0.1);
+}
+
+.stTabs [aria-selected="true"] {
+    color: var(--text-inverse) !important;
+    background: var(--accent) !important;
+    border-color: var(--accent) !important;
+    box-shadow: 0 2px 12px var(--accent-glow) !important;
+}
+
+/* ===== 6. Cards & Containers ===== */
+/* Loosened selector: Streamlit nests border wrappers deeper than direct child */
+div[data-testid="stVerticalBlockBorderWrapper"] {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border-light) !important;
+    border-radius: 2px !important;
+    box-shadow: var(--shadow-sm) !important;
+    padding: 1.75rem !important;
+    margin-bottom: 1.5rem !important;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+                box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    animation: fadeSlideUp 0.5s ease-out both;
+}
+
+div[data-testid="stVerticalBlockBorderWrapper"]:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md) !important;
+}
+
+/* ===== 7. Buttons ===== */
+.stButton > button {
+    font-family: 'Noto Sans SC', 'PingFang SC', sans-serif !important;
+    border-radius: 2px !important;
+    padding: 10px 28px !important;
+    font-weight: 600 !important;
+    font-size: 0.9rem !important;
+    letter-spacing: 0.06em !important;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    border: none !important;
+    text-align: center !important;
+    justify-content: center !important;
+}
+
+/* Primary button */
+.stButton > button[kind="primary"] {
+    background-color: var(--accent) !important;
+    color: var(--bg-primary) !important;
+    box-shadow: 0 2px 8px var(--accent-glow) !important;
+}
+
+.stButton > button[kind="primary"]:hover {
+    background-color: var(--accent-hover) !important;
+    box-shadow: 0 4px 16px rgba(184, 122, 74, 0.25) !important;
+    transform: translateY(-1px) !important;
+}
+
+.stButton > button[kind="primary"]:active {
+    transform: translateY(0) !important;
+}
+
+/* Secondary button */
+.stButton > button[kind="secondary"] {
+    background-color: var(--bg-dark) !important;
+    color: var(--text-inverse) !important;
+    border: 1.5px solid var(--border-medium) !important;
+    box-shadow: none !important;
+}
+
+.stButton > button[kind="secondary"]:hover {
+    background-color: var(--bg-primary) !important;
+    border-color: var(--accent) !important;
+    color: var(--accent) !important;
+}
+
+.stButton > button:disabled {
+    background-color: var(--border-light) !important;
+    color: var(--text-muted) !important;
+    box-shadow: none !important;
+    transform: none !important;
+    cursor: not-allowed !important;
+}
+
+/* ===== 8. Form Inputs ===== */
+.stTextInput > div > div > input,
+.stTextArea > div > div > textarea {
+    background-color: var(--bg-elevated) !important;
+    border: 1.5px solid var(--border-light) !important;
+    border-radius: 2px !important;
+    color: var(--text-primary) !important;
+    font-size: 0.95rem !important;
+    padding: 12px 16px !important;
+    font-family: 'Noto Sans SC', 'PingFang SC', sans-serif !important;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+}
+
+/* Selectbox: target the visible value container, not all nested divs */
+.stSelectbox > div[data-baseweb="select"] > div {
+    background-color: var(--bg-elevated) !important;
+    border: 1.5px solid var(--border-light) !important;
+    border-radius: 2px !important;
+    color: var(--text-primary) !important;
+    font-size: 0.95rem !important;
+    font-family: 'Noto Sans SC', 'PingFang SC', sans-serif !important;
+    min-height: 44px !important;
+}
+
+.stTextInput > div > div > input:focus,
+.stTextArea > div > div > textarea:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 3px var(--accent-glow) !important;
+    background-color: var(--bg-elevated) !important;
+}
+
+/* Placeholder color */
+.stTextInput input::placeholder,
+.stTextArea textarea::placeholder {
+    color: var(--text-secondary) !important;
+    opacity: 0.8 !important;
+}
+
+/* Disabled textarea: ensure dark readable text on light background */
+textarea:disabled,
+textarea[disabled],
+textarea[aria-disabled="true"],
+[data-baseweb="textarea"] textarea:disabled,
+[data-baseweb="textarea"] textarea[disabled],
+[data-testid="stTextArea"] textarea:disabled,
+[data-testid="stTextArea"] textarea[disabled],
+.stTextArea textarea:disabled,
+.stTextArea > div textarea:disabled,
+.stTextArea [data-testid="stTextAreaContainer"] textarea:disabled {
+    color: #1A2E22 !important;
+    opacity: 1 !important;
+    -webkit-text-fill-color: #1A2E22 !important;
+    background-color: #F5F0E8 !important;
+}
+
+.stSelectbox > div[data-baseweb="select"] > div:focus-within {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 3px var(--accent-glow) !important;
+}
+
+/* Date input */
+.stDateInput > div > div > input {
+    background-color: var(--bg-elevated) !important;
+    border: 1.5px solid var(--border-light) !important;
+    border-radius: 2px !important;
+}
+
+/* ===== 9. File Uploader ===== */
+.stFileUploader > div > div > div {
+    background-color: color-mix(in srgb, var(--bg-card) 50%, transparent) !important;
+    border: 2px dashed var(--border-medium) !important;
+    border-radius: 2px !important;
+    color: var(--text-secondary) !important;
+    transition: all 0.2s ease !important;
+}
+
+.stFileUploader > div > div > div:hover {
+    border-color: var(--accent) !important;
+    background-color: var(--accent-light) !important;
+}
+
+/* ===== 10. Data Tables ===== */
+[data-testid="stDataFrame"] {
+    border-radius: 2px !important;
+    overflow: hidden !important;
+    box-shadow: var(--shadow-sm) !important;
+    border: 1px solid var(--border-light) !important;
+}
+
+[data-testid="stDataFrame"] table {
+    font-family: 'Noto Sans SC', 'PingFang SC', sans-serif !important;
+    border-collapse: collapse !important;
+}
+
+[data-testid="stDataFrame"] th {
+    background-color: var(--bg-dark) !important;
+    color: var(--text-inverse) !important;
+    font-weight: 600 !important;
+    padding: 12px 16px !important;
+    text-align: left !important;
+    font-size: 0.85rem !important;
+    letter-spacing: 0.04em !important;
+}
+
+[data-testid="stDataFrame"] td {
+    padding: 12px 16px !important;
+    border-bottom: 1px solid var(--border-light) !important;
+    color: var(--text-primary) !important;
+}
+
+[data-testid="stDataFrame"] tr:nth-child(even) {
+    background-color: var(--bg-card) !important;
+}
+
+[data-testid="stDataFrame"] tr:hover {
+    background-color: var(--accent-light) !important;
+}
+
+/* ===== 11. Alerts & Notifications ===== */
+/* Dark subtle cards with top accent line — unified palette, no jarring bright backgrounds */
+.stAlert {
+    background-color: rgba(26, 46, 34, 0.55) !important;
+    border: 1px solid rgba(245, 240, 232, 0.1) !important;
+    border-radius: 2px !important;
+    padding: 1rem 1.25rem !important;
+    font-family: 'Noto Sans SC', 'PingFang SC', sans-serif !important;
+}
+
+/* Top accent line distinguishes type without large color blocks */
+.stAlert[data-testid="stNotificationContentError"] {
+    border-top: 2px solid var(--danger) !important;
+    background-color: rgba(168, 74, 74, 0.1) !important;
+}
+.stAlert[data-testid="stNotificationContentInfo"] {
+    border-top: 2px solid var(--accent) !important;
+    background-color: rgba(184, 122, 74, 0.1) !important;
+}
+.stAlert[data-testid="stNotificationContentSuccess"] {
+    border-top: 2px solid var(--success) !important;
+    background-color: rgba(74, 124, 89, 0.1) !important;
+}
+.stAlert[data-testid="stNotificationContentWarning"] {
+    border-top: 2px solid var(--warning) !important;
+    background-color: rgba(184, 146, 42, 0.1) !important;
+}
+
+/* All text inside alerts — light for readability on dark card */
+.stAlert,
+.stAlert p,
+.stAlert span,
+.stAlert div,
+.stAlert strong,
+.stAlert label,
+.stAlert li,
+.stAlert h1,
+.stAlert h2,
+.stAlert h3,
+.stAlert h4 {
+    color: var(--text-inverse) !important;
+}
+
+.stAlert code {
+    background-color: rgba(245, 240, 232, 0.15) !important;
+    color: var(--accent-light) !important;
+    padding: 2px 6px !important;
+    border-radius: 2px !important;
+    font-family: 'JetBrains Mono', 'SF Mono', monospace !important;
+    font-size: 0.85em !important;
+}
+
+/* ===== 12. Metrics ===== */
+[data-testid="stMetric"] {
+    background: transparent !important;
+    border: none !important;
+    border-bottom: 2px solid var(--accent) !important;
+    border-radius: 0 !important;
+    padding: 1rem 0 !important;
+}
+
+[data-testid="stMetric"] > div > div:first-child {
+    color: var(--text-secondary) !important;
+    font-size: 0.75rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.1em !important;
+    font-family: 'Noto Sans SC', 'PingFang SC', sans-serif !important;
+}
+
+[data-testid="stMetric"] > div > div:last-child {
+    color: var(--text-inverse) !important;
+    font-size: 2.2rem !important;
+    font-weight: 700 !important;
+    font-family: 'Noto Serif SC', 'Songti SC', serif !important;
+}
+
+/* ===== 13. Progress Bars ===== */
+/* Track background */
+[data-testid="stProgress"] > div {
+    background-color: rgba(245, 240, 232, 0.12) !important;
+    border-radius: 2px !important;
+}
+
+/* Actual progress fill */
+[data-testid="stProgress"] > div > div {
+    background-color: var(--accent) !important;
+    border-radius: 2px !important;
+}
+
+/* Progress text label above bar */
+[data-testid="stProgress"] [class*="st-emotion"] {
+    color: var(--text-inverse) !important;
+    font-family: 'Noto Sans SC', 'PingFang SC', sans-serif !important;
+}
+
+/* ===== 14. Expanders ===== */
+.stExpander {
+    border: 1px solid var(--border-light) !important;
+    border-radius: 2px !important;
+    background: var(--bg-card) !important;
+    color: var(--text-primary) !important;
+    overflow: hidden !important;
+    box-shadow: var(--shadow-sm) !important;
+}
+
+.stExpander > div:first-child {
+    background: var(--bg-primary) !important;
+    color: var(--text-inverse) !important;
+    font-weight: 600 !important;
+    padding: 1rem 1.5rem !important;
+    border-bottom: 1px solid var(--border-light) !important;
+}
+
+/* Protect expander icon fonts from inherited CJK font */
+.stExpander > div:first-child button *,
+.stExpander > div:first-child [data-testid="stExpanderToggleIcon"],
+.stExpander [role="button"] svg,
+.stExpander [role="button"] [data-testid] {
+    font-family: revert !important;
+}
+
+/* ===== 15. Dividers ===== */
+hr {
+    border: none !important;
+    border-top: 1px solid var(--border-light) !important;
+    margin: 2rem 0 !important;
+}
+
+.stDivider {
+    background-color: var(--border-light) !important;
+}
+
+/* ===== 16. Checkbox & Radio ===== */
+.stCheckbox > div > div > div,
+.stRadio > div > div > div {
+    background-color: var(--bg-elevated) !important;
+    border: 1.5px solid var(--border-light) !important;
+}
+
+.stCheckbox > div > div > div[data-checked="true"],
+.stRadio > div > div > div[data-checked="true"] {
+    background-color: var(--accent) !important;
+    border-color: var(--accent) !important;
+}
+
+/* ===== 17. Spinner / Loading ===== */
+[data-testid="stSpinner"] > div {
+    border-color: var(--accent) !important;
+    border-top-color: transparent !important;
+}
+
+/* ===== 18. Animations ===== */
+@keyframes fadeSlideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes fadeSlideIn {
+    from {
+        opacity: 0;
+        transform: translateX(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+/* Apply entrance animation to main content blocks only */
+.block-container > div > div[data-testid="stVerticalBlock"] {
+    animation: fadeSlideUp 0.5s ease-out both;
+}
+
+/* Stagger cards */
+div[data-testid="stVerticalBlockBorderWrapper"]:nth-child(1) { animation-delay: 0.08s; }
+div[data-testid="stVerticalBlockBorderWrapper"]:nth-child(2) { animation-delay: 0.16s; }
+div[data-testid="stVerticalBlockBorderWrapper"]:nth-child(3) { animation-delay: 0.24s; }
+div[data-testid="stVerticalBlockBorderWrapper"]:nth-child(4) { animation-delay: 0.32s; }
+
+/* ===== 19. Custom Utility Classes ===== */
+.accent-text { color: var(--accent) !important; }
+.muted-text { color: var(--text-muted) !important; }
+.secondary-text { color: var(--text-secondary) !important; }
+
+/* Section label */
+.section-label {
+    font-size: 0.75rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.12em !important;
+    color: var(--text-secondary) !important;
+    margin-bottom: 0.5rem !important;
+}
+
+/* Status badges */
+.badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 100px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.badge-recommend {
+    background-color: var(--success-light);
+    color: var(--success);
+}
+
+.badge-eliminate {
+    background-color: var(--danger-light);
+    color: var(--danger);
+}
+
+.badge-pending {
+    background-color: var(--warning-light);
+    color: var(--warning);
+}
+</style>
+"""
+
+# 注入 CSS
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+
+# ========== 模块初始化 ==========
+
+@st.cache_resource
+def init_parser() -> PDFParser:
+    return PDFParser()
+
+
+@st.cache_resource
+def init_analyzer() -> AIAnalyzer:
+    return AIAnalyzer()
+
+
+@st.cache_resource
+def init_exporter() -> ExcelExporter:
+    return ExcelExporter()
+
+
+def get_database() -> Database:
+    """每个会话独立获取Database实例"""
+    return Database()
+
+
+def get_modules():
+    """获取模块实例"""
+    return {
+        "pdf_parser": init_parser(),
+        "ai_analyzer": AIAnalyzer(),  # 不缓存，确保配置更改后立即生效
+        "database": get_database(),
+        "excel_exporter": init_exporter()
+    }
+
+
+# ========== 主界面 ==========
+
+def main():
+    # 页面标题 — 不对称编辑风格
+    header_left, header_right = st.columns([3, 2])
+    with header_left:
+        st.markdown(
+            "<h1 style='margin-bottom: 0; color: var(--text-inverse) !important;'>"
+            "招聘助手"
+            "</h1>"
+            "<div class='title-rule'></div>",
+            unsafe_allow_html=True
+        )
+    with header_right:
+        st.markdown(
+            "<p class='subtitle' style='text-align: right; margin-top: 1.5rem;'>"
+            "销售岗位招聘管理系统"
+            "</p>",
+            unsafe_allow_html=True
+        )
+
+    # 检查AI配置
+    missing_config = validate_ai_config()
+    if missing_config:
+        st.error(f"AI 服务未配置: {', '.join(missing_config)}")
+        st.info(
+            "请前往「系统配置」页面填写 API 信息，"
+            "或提前设置环境变量：`export AI_API_KEY=your-api-key`"
+        )
+
+    # 四个主标签页
+    tab1, tab2, tab3, tab4 = st.tabs(
+        ["新增候选人", "历史记录", "台账导出", "系统配置"]
+    )
+
+    with tab1:
+        render_add_candidate()
+
+    with tab2:
+        render_history()
+
+    with tab3:
+        render_export()
+
+    with tab4:
+        render_settings()
+
+
+# ========== 标签页1：新增候选人 ==========
+
+def render_add_candidate():
+    """新增候选人页面"""
+    # 如果还有待审核的候选人，展示结果
+    if st.session_state.get("pending_candidates"):
+        show_pending_results()
+        return
+
+    st.markdown("### 新增候选人")
+    st.markdown(
+        "<p class='secondary-text' style='margin-bottom: 1.5rem;'>"
+        "上传简历 → 输入电话纪要 → AI自动分析"
+        "</p>",
+        unsafe_allow_html=True
+    )
+
+    # 第一步：上传简历
+    with st.container(border=True):
+        st.markdown("#### 第一步：上传简历")
+        uploaded_files = st.file_uploader(
+            "拖拽或点击上传简历PDF文件",
+            type="pdf",
+            accept_multiple_files=True
+        )
+
+    if not uploaded_files:
+        st.info("请先上传简历PDF文件，支持同时上传多份")
+        return
+
+    # 第二步：输入电话纪要
+    with st.container(border=True):
+        st.markdown("#### 第二步：输入电话纪要")
+
+        phone_transcripts = {}
+        for file in uploaded_files:
+            name = file.name.replace(".pdf", "")
+            transcript = st.text_area(
+                f"候选人：**{name}**",
+                height=120,
+                key=f"transcript_{name}",
+                placeholder="请粘贴该候选人的电话面试纪要内容..."
+            )
+            phone_transcripts[name] = transcript
+
+    # 第三步：补充信息
+    with st.container(border=True):
+        st.markdown("#### 第三步：补充信息")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            communicate_date = st.date_input("沟通日期", datetime.now())
+            communicate_time = st.selectbox(
+                "沟通时间",
+                options=[f"{h:02d}:{m:02d}" for h in range(9, 19) for m in [0, 30]],
+                index=10
+            )
+        with col2:
+            channel = st.selectbox("招聘渠道", CHANNELS)
+
+        # 实习生姓名：记住最后一次输入，同一会话中自动填充
+        if "last_intern_name" not in st.session_state:
+            st.session_state["last_intern_name"] = ""
+        intern_name = st.text_input(
+            "跟进实习生",
+            value=st.session_state["last_intern_name"],
+            placeholder="请输入跟进此候选人的实习生姓名"
+        )
+        if intern_name != st.session_state.get("last_intern_name", ""):
+            st.session_state["last_intern_name"] = intern_name
+
+        communicate_datetime = f"{communicate_date} {communicate_time}"
+
+    # 开始处理按钮
+    col_btn, _ = st.columns([1, 3])
+    with col_btn:
+        if st.button("开始分析处理", type="primary", width="stretch"):
+            with st.spinner("正在处理候选人..."):
+                try:
+                    process_candidates(uploaded_files, phone_transcripts,
+                                       communicate_datetime, channel, intern_name)
+                except Exception as e:
+                    st.error(f"处理失败: {e}")
+
+
+def _extract_name_from_filename(filename: str) -> str:
+    """从文件名中提取候选人姓名（兜底用）"""
+    # 去掉扩展名
+    name = filename.replace(".pdf", "").replace(".PDF", "")
+    # 去掉【...】前缀（如【销售专员】）
+    name = re.sub(r'^【.*?】', '', name)
+    name = re.sub(r'[【】]', '', name)
+    # 按 _ 或空格分割
+    parts = [p.strip() for p in re.split(r'[_\s]', name) if p.strip()]
+    # 过滤掉常见非姓名部分，找第一个像人名的
+    excluded = {'副本', '简历', '应聘', '求职'}
+    for part in parts:
+        if part in excluded:
+            continue
+        # 跳过类似"24年毕业"
+        if re.match(r'\d+年毕业', part):
+            continue
+        # 包含中文且长度2-4，大概率是姓名
+        if re.search(r'[一-龥]', part) and 2 <= len(part) <= 4:
+            return part
+    # 兜底：返回第一个有效部分
+    for part in parts:
+        if part not in excluded and not re.match(r'\d+年毕业', part):
+            return part
+    return name.strip()
+
+
+def _render_readonly_box(text: str, height: int = 120):
+    """渲染自定义只读文本框（完全绕开 Streamlit disabled textarea 的样式陷阱）"""
+    escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    st.markdown(
+        f"<div style='"
+        f"height:{height}px;"
+        f"overflow:auto;"
+        f"padding:12px 16px;"
+        f"background-color:#F5F0E8;"
+        f"border:1.5px solid #DDD8CE;"
+        f"border-radius:2px;"
+        f"color:#1A2E22;"
+        f"font-size:0.95rem;"
+        f"line-height:1.6;"
+        f"font-family:&quot;Noto Sans SC&quot;,&quot;PingFang SC&quot;,sans-serif;"
+        f"white-space:pre-wrap;"
+        f"word-break:break-word;"
+        f"'>"
+        f"{escaped}</div>",
+        unsafe_allow_html=True
+    )
+
+
+def _format_score_remarks(scores: dict, total: float) -> str:
+    """将评分详情格式化为备注文本（仅保留总分）"""
+    if not scores:
+        return ""
+    return f"总分:{total:.2f}"
+
+
+def process_candidates(files, transcripts, communicate_time, channel, intern_name=""):
+    """处理候选人"""
+    modules = get_modules()
+    results = []
+
+    for idx, file in enumerate(files):
+        # 将UploadedFile保存到临时文件
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+            tmp_file.write(file.getvalue())
+            tmp_path = tmp_file.name
+
+        try:
+            # 1. 解析简历
+            resume_data = modules["pdf_parser"].parse_resume(tmp_path)
+
+            # 2. 姓名兜底：如果PDF没解析到，尝试从文件名提取
+            if not resume_data.get("name"):
+                name_from_file = _extract_name_from_filename(file.name)
+                if name_from_file:
+                    resume_data["name"] = name_from_file
+
+            # 3. AI分析（无论是否有电话纪要，都基于简历进行分析评分）
+            name_key = file.name.replace(".pdf", "")
+            transcript = transcripts.get(name_key, "")
+            analysis = modules["ai_analyzer"].analyze_phone_record(
+                transcript, resume_data.get("raw_text", "")
+            )
+
+            # 4. 合并数据
+            scores = analysis.get("scores", {})
+            total_score = analysis.get("total_score", 0.0)
+            candidate_data = {
+                **resume_data,
+                "channel": channel,
+                "communicate_time": communicate_time,
+                "description": analysis.get("description", ""),
+                "score_details": scores,
+                "score_total": total_score,
+                "result": None,
+                "phone_transcript": transcript,
+                "intern_name": intern_name,
+                "remarks": _format_score_remarks(scores, total_score)
+            }
+
+            # 5. 存入数据库
+            candidate_id = modules["database"].insert_candidate(candidate_data)
+            candidate_data["id"] = candidate_id
+            results.append(candidate_data)
+
+        except Exception as e:
+            st.error(f"处理 {file.name} 时出错: {e}")
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    if results:
+        st.session_state["pending_candidates"] = results
+        st.rerun()
+    else:
+        st.warning("没有成功处理任何候选人，请检查错误信息。")
+
+
+def show_pending_results():
+    """展示刚处理完成的候选人结果"""
+    pending = st.session_state["pending_candidates"]
+
+    st.success(f"成功处理 {len(pending)} 位候选人")
+
+    modules = get_modules()
+
+    for candidate in pending:
+        with st.container(border=True):
+            # 头部信息
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.markdown(f"**{candidate.get('name') or '未识别'}**")
+                st.caption(f"{candidate.get('school') or '学校未识别'} | {candidate.get('education') or '学历未识别'}")
+            with col2:
+                if candidate.get("score_total"):
+                    st.metric("综合评分", f"{candidate.get('score_total', 0):.2f} / 5.0")
+
+            # 详情展开
+            with st.expander("查看详情"):
+                info_col1, info_col2 = st.columns(2)
+                with info_col1:
+                    st.write(f"**手机：** {candidate.get('phone') or '无'}")
+                    st.write(f"**专业：** {candidate.get('major') or '无'}")
+                    st.write(f"**性别：** {candidate.get('gender') or '无'}")
+                with info_col2:
+                    st.write(f"**应届：** {candidate.get('is_fresh_grad') or '无'}")
+                    st.write(f"**邮箱：** {candidate.get('email') or '无'}")
+                    st.write(f"**渠道：** {candidate.get('channel') or '无'}")
+
+                desc = candidate.get("description", "")
+                if desc:
+                    st.markdown("**台账内容**")
+                    _render_readonly_box(desc, height=120)
+
+                scores = candidate.get("score_details", {})
+                if scores:
+                    st.markdown("**评分详情**")
+                    for dim, weight in SCORING_DIMENSIONS.items():
+                        score = scores.get(dim, 0)
+                        pct = (score / 5.0) * 100 if score else 0
+                        st.markdown(
+                            f"<div style='margin-bottom:10px;'>"
+                            f"<div style='display:flex;justify-content:space-between;margin-bottom:4px;'>"
+                            f"<span style='color:var(--text-inverse);font-size:0.9rem;'>{dim}</span>"
+                            f"<span style='color:var(--accent);font-weight:600;'>{score:.1f}</span>"
+                            f"</div>"
+                            f"<div style='background:rgba(245,240,232,0.12);height:6px;border-radius:2px;'>"
+                            f"<div style='background:var(--accent);height:100%;width:{pct}%;border-radius:2px;'></div>"
+                            f"</div>"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+
+            # 标记结果按钮
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                if st.button("推荐", key=f"rec_{candidate['id']}", width="stretch"):
+                    modules["database"].update_candidate(
+                        candidate["id"], {"result": "推荐"}
+                    )
+                    candidate["result"] = "推荐"
+                    st.rerun()
+            with c2:
+                if st.button("淘汰", key=f"elim_{candidate['id']}", width="stretch"):
+                    modules["database"].update_candidate(
+                        candidate["id"], {"result": "淘汰"}
+                    )
+                    candidate["result"] = "淘汰"
+                    st.rerun()
+            with c3:
+                if st.button("暂不标记", key=f"skip_{candidate['id']}", width="stretch"):
+                    pass
+
+    if st.button("继续添加新候选人", width="stretch"):
+        st.session_state["pending_candidates"] = []
+        st.rerun()
+
+
+# ========== 标签页2：历史记录 ==========
+
+def render_history():
+    """历史记录页面"""
+    st.markdown("### 历史记录")
+
+    modules = get_modules()
+
+    # 筛选和搜索
+    col1, col2, _ = st.columns([1, 1, 2])
+    with col1:
+        result_filter = st.selectbox("筛选结果", ["全部", "推荐", "淘汰", "待审核"])
+    with col2:
+        search_keyword = st.text_input("搜索姓名/手机")
+    st.divider()
+
+    # 获取数据
+    try:
+        if search_keyword:
+            candidates = modules["database"].search_candidates(search_keyword)
+        elif result_filter and result_filter != "全部":
+            filter_val = None if result_filter == "待审核" else result_filter
+            candidates = modules["database"].get_all_candidates(filter_val)
+        else:
+            candidates = modules["database"].get_all_candidates()
+    except Exception as e:
+        st.error(f"查询失败: {e}")
+        return
+
+    # 待审核筛选
+    if result_filter == "待审核":
+        candidates = [c for c in candidates if not c.get("result")]
+
+    # 统计卡片
+    if candidates:
+        total = len(candidates)
+        recommend = sum(1 for c in candidates if c.get("result") == "推荐")
+        eliminate = sum(1 for c in candidates if c.get("result") == "淘汰")
+        pending = sum(1 for c in candidates if not c.get("result"))
+
+        stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+        with stat_col1:
+            st.metric("总计", total)
+        with stat_col2:
+            st.metric("推荐", recommend)
+        with stat_col3:
+            st.metric("淘汰", eliminate)
+        with stat_col4:
+            st.metric("待审核", pending)
+
+    # 显示表格
+    if not candidates:
+        st.info("暂无数据")
+        return
+
+    df_data = [{
+        "序号": c["id"],
+        "岗位": "销售代表",
+        "实习生": c.get("intern_name") or "—",
+        "沟通时间": c.get("communicate_time") or "—",
+        "姓名": c["name"] or "未识别",
+        "手机号": c["phone"] or "—",
+        "邮箱": c.get("email") or "—",
+        "性别": c.get("gender") or "—",
+        "出生年": c.get("birth_year") or "—",
+        "学校": c["school"] or "—",
+        "专业": c["major"] or "—",
+        "学历": c["education"] or "—",
+        "是否为应届生（2026届）": c.get("is_fresh_grad") or "—",
+        "招聘渠道": c.get("channel") or "—",
+        "推荐沟通情况": c.get("description") or "—",
+        "备注": c.get("remarks") or "—"
+    } for c in candidates]
+
+    st.dataframe(df_data, width="stretch", hide_index=True)
+
+    # 查看详情
+    st.divider()
+    selected_id = st.selectbox("选择候选人查看详情", [c["id"] for c in candidates])
+    if selected_id:
+        show_candidate_detail(selected_id)
+
+
+def _format_candidate_row(c: dict) -> str:
+    """将候选人信息格式化为表格行文本（制表符分隔），可直接粘贴到 Excel"""
+    def _v(val):
+        """空值显示为 —，保证 Excel 粘贴时每列都有内容"""
+        if val is None:
+            return "—"
+        s = str(val).strip()
+        return s if s else "—"
+
+    fields = [
+        _v(c.get("id")),
+        "销售代表",
+        _v(c.get("intern_name")),
+        _v(c.get("communicate_time")),
+        _v(c.get("name")),
+        _v(c.get("phone")),
+        _v(c.get("email")),
+        _v(c.get("gender")),
+        _v(c.get("birth_year")),
+        _v(c.get("school")),
+        _v(c.get("major")),
+        _v(c.get("education")),
+        _v(c.get("is_fresh_grad")),
+        _v(c.get("channel")),
+        _v(c.get("description")),
+        _v(c.get("remarks"))
+    ]
+    return "\t".join(fields)
+
+
+def _render_copy_button(text: str, btn_key: str):
+    """使用 pyperclip 复制到剪贴板，Streamlit 原生按钮样式"""
+    if st.button("复制", key=btn_key, use_container_width=True):
+        try:
+            import pyperclip
+            pyperclip.copy(text)
+            st.toast("已复制到剪贴板", icon="✅")
+        except Exception as e:
+            st.toast(f"复制失败: {e}", icon="❌")
+
+
+def show_candidate_detail(candidate_id: int):
+    """显示候选人详情（支持编辑和删除）"""
+    modules = get_modules()
+    try:
+        candidate = modules["database"].get_candidate(candidate_id)
+    except Exception as e:
+        st.error(f"查询详情失败: {e}")
+        return
+
+    if not candidate:
+        st.warning("候选人不存在")
+        return
+
+    st.subheader(f"{candidate['name'] or '未知'}")
+
+    # ========== 编辑模式 ==========
+    edit_key = f"_edit_mode_{candidate_id}"
+    if edit_key not in st.session_state:
+        st.session_state[edit_key] = False
+
+    if not st.session_state[edit_key]:
+        # 只读模式
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write(f"**手机：** {candidate['phone'] or '无'}")
+            st.write(f"**邮箱：** {candidate['email'] or '无'}")
+            st.write(f"**学校：** {candidate['school'] or '无'}")
+            st.write(f"**专业：** {candidate['major'] or '无'}")
+        with col2:
+            st.write(f"**学历：** {candidate['education'] or '无'}")
+            st.write(f"**性别：** {candidate['gender'] or '无'}")
+            st.write(f"**出生年份：** {candidate['birth_year'] or '无'}")
+            st.write(f"**应届：** {candidate['is_fresh_grad'] or '无'}")
+
+        st.write(f"**招聘渠道：** {candidate['channel'] or '无'} | **沟通时间：** {candidate['communicate_time'] or '无'}")
+        st.write(f"**跟进实习生：** {candidate.get('intern_name') or '无'}")
+        if candidate.get("remarks"):
+            st.write(f"**备注：** {candidate['remarks']}")
+    else:
+        # 编辑模式
+        with st.container(border=True):
+            st.markdown("**编辑基本信息**")
+            e_col1, e_col2 = st.columns(2)
+            with e_col1:
+                edit_name = st.text_input("姓名", value=candidate.get("name") or "", key=f"edit_name_{candidate_id}")
+                edit_phone = st.text_input("手机", value=candidate.get("phone") or "", key=f"edit_phone_{candidate_id}")
+                edit_school = st.text_input("学校", value=candidate.get("school") or "", key=f"edit_school_{candidate_id}")
+                edit_major = st.text_input("专业", value=candidate.get("major") or "", key=f"edit_major_{candidate_id}")
+            with e_col2:
+                edit_edu = st.text_input("学历", value=candidate.get("education") or "", key=f"edit_edu_{candidate_id}")
+                edit_gender = st.text_input("性别", value=candidate.get("gender") or "", key=f"edit_gender_{candidate_id}")
+                edit_birth = st.text_input("出生年份", value=str(candidate.get("birth_year") or ""), key=f"edit_birth_{candidate_id}")
+                edit_fresh = st.text_input("是否应届", value=candidate.get("is_fresh_grad") or "", key=f"edit_fresh_{candidate_id}")
+
+            edit_channel = st.text_input("招聘渠道", value=candidate.get("channel") or "", key=f"edit_channel_{candidate_id}")
+            edit_intern = st.text_input("跟进实习生", value=candidate.get("intern_name") or "", key=f"edit_intern_{candidate_id}")
+            edit_remarks = st.text_input("备注", value=candidate.get("remarks") or "", key=f"edit_remarks_{candidate_id}")
+
+            save_col, cancel_col = st.columns([1, 1])
+            with save_col:
+                if st.button("保存修改", type="primary", key=f"save_edit_{candidate_id}", width="stretch"):
+                    update_data = {
+                        "name": edit_name,
+                        "phone": edit_phone,
+                        "school": edit_school,
+                        "major": edit_major,
+                        "education": edit_edu,
+                        "gender": edit_gender,
+                        "channel": edit_channel,
+                        "is_fresh_grad": edit_fresh,
+                        "intern_name": edit_intern,
+                        "remarks": edit_remarks,
+                    }
+                    if edit_birth.strip():
+                        try:
+                            update_data["birth_year"] = int(edit_birth.strip())
+                        except ValueError:
+                            pass
+                    try:
+                        modules["database"].update_candidate(candidate_id, update_data)
+                        st.success("保存成功")
+                        st.session_state[edit_key] = False
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"保存失败: {e}")
+            with cancel_col:
+                if st.button("取消", key=f"cancel_edit_{candidate_id}", width="stretch"):
+                    st.session_state[edit_key] = False
+                    st.rerun()
+
+    # 台账描述
+    desc = candidate.get("description", "")
+    if desc:
+        st.markdown("**台账内容**")
+        _render_readonly_box(desc, height=150)
+
+    # 评分
+    scores = candidate.get("score_details", {})
+    st.markdown("**综合评分**")
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        st.metric("总分", f"{candidate['score_total'] or 0:.2f} / 5.0")
+    with col2:
+        for dim, weight in SCORING_DIMENSIONS.items():
+            score = scores.get(dim, 0)
+            pct = (score / 5.0) * 100 if score else 0
+            st.markdown(
+                f"<div style='margin-bottom:10px;'>"
+                f"<div style='display:flex;justify-content:space-between;margin-bottom:4px;'>"
+                f"<span style='color:var(--text-inverse);font-size:0.9rem;'>{dim}</span>"
+                f"<span style='color:var(--accent);font-weight:600;'>{score:.1f}</span>"
+                f"</div>"
+                f"<div style='background:rgba(245,240,232,0.12);height:6px;border-radius:2px;'>"
+                f"<div style='background:var(--accent);height:100%;width:{pct}%;border-radius:2px;'></div>"
+                f"</div>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
+    # 操作按钮行
+    st.markdown("**操作**")
+    current_result = candidate.get("result")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        if st.button("推荐", disabled=(current_result == "推荐"),
+                     key=f"hist_rec_{candidate_id}", width="stretch"):
+            try:
+                modules["database"].update_candidate(
+                    candidate_id, {"result": "推荐"}
+                )
+                st.success("已标记为推荐")
+                st.rerun()
+            except Exception as e:
+                st.error(f"标记失败: {e}")
+    with c2:
+        if st.button("淘汰", disabled=(current_result == "淘汰"),
+                     key=f"hist_elim_{candidate_id}", width="stretch"):
+            try:
+                modules["database"].update_candidate(
+                    candidate_id, {"result": "淘汰"}
+                )
+                st.success("已标记为淘汰")
+                st.rerun()
+            except Exception as e:
+                st.error(f"标记失败: {e}")
+    with c3:
+        if st.button("编辑信息", key=f"hist_edit_{candidate_id}", width="stretch"):
+            st.session_state[edit_key] = True
+            st.rerun()
+    with c4:
+        _render_copy_button(
+            _format_candidate_row(candidate),
+            f"copy_btn_{candidate_id}"
+        )
+    with c5:
+        # 删除需要确认
+        del_confirm_key = f"_del_confirm_{candidate_id}"
+        if del_confirm_key not in st.session_state:
+            st.session_state[del_confirm_key] = False
+
+        if not st.session_state[del_confirm_key]:
+            if st.button("删除", key=f"hist_del_{candidate_id}", width="stretch"):
+                st.session_state[del_confirm_key] = True
+                st.rerun()
+        else:
+            if st.button("确认删除？", key=f"hist_del_confirm_{candidate_id}", width="stretch"):
+                try:
+                    modules["database"].delete_candidate(candidate_id)
+                    st.success("已删除")
+                    # 清除相关状态
+                    if "pending_candidates" in st.session_state:
+                        st.session_state["pending_candidates"] = [
+                            c for c in st.session_state["pending_candidates"]
+                            if c.get("id") != candidate_id
+                        ]
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"删除失败: {e}")
+            if st.button("取消", key=f"hist_del_cancel_{candidate_id}", width="stretch"):
+                st.session_state[del_confirm_key] = False
+                st.rerun()
+
+
+# ========== 标签页3：台账导出 ==========
+
+def render_export():
+    """台账预览与导出页面"""
+    st.markdown("### 台账预览与导出")
+
+    modules = get_modules()
+
+    # 获取数据
+    try:
+        candidates = modules["database"].get_all_candidates()
+    except Exception as e:
+        st.error(f"获取数据失败: {e}")
+        return
+
+    if not candidates:
+        st.info("暂无数据可导出")
+        return
+
+    # 统计
+    recommend_candidates = [c for c in candidates if c.get("result") == "推荐"]
+    eliminate_candidates = [c for c in candidates if c.get("result") == "淘汰"]
+
+    stat_col1, stat_col2 = st.columns(2)
+    with stat_col1:
+        st.metric("推荐台账", f"{len(recommend_candidates)} 人")
+    with stat_col2:
+        st.metric("淘汰台账", f"{len(eliminate_candidates)} 人")
+
+    # Tab切换
+    tab_recommend, tab_eliminate = st.tabs(["推荐台账", "淘汰台账"])
+
+    with tab_recommend:
+        show_table(recommend_candidates, "推荐")
+
+    with tab_eliminate:
+        show_table(eliminate_candidates, "淘汰")
+
+    # 导出选项
+    with st.container(border=True):
+        st.markdown("#### 导出设置")
+        col1, col2 = st.columns(2)
+        with col1:
+            include_scores = st.checkbox("包含评分详情", value=True)
+        with col2:
+            include_description = st.checkbox("包含沟通情况", value=True)
+
+    # 导出按钮
+    if st.button("导出Excel文件", type="primary", width="stretch"):
+        try:
+            filepath = modules["excel_exporter"].export(
+                candidates,
+                include_scores=include_scores,
+                include_description=include_description
+            )
+            with open(filepath, "rb") as f:
+                st.download_button(
+                    label="点击下载Excel文件",
+                    data=f,
+                    file_name=os.path.basename(filepath),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    width="stretch"
+                )
+        except Exception as e:
+            st.error(f"导出失败: {e}")
+
+
+# ========== 标签页4：系统配置 ==========
+
+PROVIDER_PRESETS = {
+    "OpenAI 官方": {
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-4o-mini",
+        "provider": "openai",
+    },
+    "硅基流动": {
+        "base_url": "https://api.siliconflow.cn/v1",
+        "model": "Qwen/Qwen2.5-72B-Instruct",
+        "provider": "openai",
+    },
+    "DashScope (阿里云)": {
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen-plus",
+        "provider": "openai",
+    },
+    "其他自定义": {
+        "base_url": "",
+        "model": "",
+        "provider": "openai",
+    },
+}
+
+
+def render_settings():
+    """AI 服务配置页面"""
+    # 显示保存成功提示（刷新后保留一次）
+    if st.session_state.pop("_config_saved", False):
+        st.markdown(
+            """
+            <div style="
+                text-align: center;
+                padding: 1rem 1.5rem;
+                margin-bottom: 1.5rem;
+                background: rgba(74, 124, 89, 0.15);
+                border: 1px solid rgba(74, 124, 89, 0.3);
+                border-radius: 2px;
+                color: #E4EDE6;
+                font-family: 'Noto Sans SC', sans-serif;
+                font-size: 0.95rem;
+            ">
+                配置已保存，可前往「新增候选人」页面使用 AI 分析功能
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    st.markdown("### 系统配置")
+    st.markdown(
+        "<p class='secondary-text' style='margin-bottom: 1.5rem;'>"
+        "配置 AI 服务参数，信息会自动保存到本地文件，刷新浏览器不会丢失"
+        "</p>",
+        unsafe_allow_html=True
+    )
+
+    # 读取当前配置（session_state → 用户文件 → 默认值）
+    current = get_ai_config()
+
+    # 根据当前 base_url 推断选中的服务商模板
+    current_url = current.get("base_url", "") or ""
+    preset_key = "OpenAI 官方"
+    for name, preset in PROVIDER_PRESETS.items():
+        if preset["base_url"] == current_url:
+            preset_key = name
+            break
+    if not current_url and current.get("provider") == "dashscope":
+        preset_key = "DashScope (阿里云)"
+
+    with st.container(border=True):
+        st.markdown("#### AI 服务配置")
+
+        preset = st.selectbox(
+            "选择服务商模板",
+            options=list(PROVIDER_PRESETS.keys()),
+            index=list(PROVIDER_PRESETS.keys()).index(preset_key),
+            key="cfg_preset",
+            help="选择后会自动填充推荐的 Base URL 和模型"
+        )
+
+        # 如果切换了模板，用默认值初始化 session_state 表单值
+        selected_preset = PROVIDER_PRESETS[preset]
+        if f"_preset_initialized_{preset}" not in st.session_state:
+            st.session_state["cfg_model_val"] = selected_preset["model"]
+            st.session_state["cfg_base_url_val"] = selected_preset["base_url"]
+            st.session_state[f"_preset_initialized_{preset}"] = True
+            # 清除其他模板的标记
+            for k in list(st.session_state.keys()):
+                if k.startswith("_preset_initialized_") and k != f"_preset_initialized_{preset}":
+                    del st.session_state[k]
+
+        # 用 session_state 管理值，避免 selectbox 切回时覆盖用户输入
+        if "cfg_model_val" not in st.session_state:
+            st.session_state["cfg_model_val"] = current.get("model", selected_preset["model"])
+        if "cfg_base_url_val" not in st.session_state:
+            st.session_state["cfg_base_url_val"] = current.get("base_url", selected_preset["base_url"]) or ""
+
+        api_key = st.text_input(
+            "API 密钥",
+            value=current.get("api_key", ""),
+            type="password",
+            key="cfg_api_key",
+            placeholder="sk-...",
+            help="请填入真实的 API Key，不会显示在界面上"
+        )
+
+        model = st.text_input(
+            "模型名称",
+            value=st.session_state["cfg_model_val"],
+            key="cfg_model_input",
+            placeholder="gpt-4o-mini",
+            help="例如：gpt-4o-mini、Qwen/Qwen2.5-72B-Instruct、qwen-plus"
+        )
+        # 同步回 session_state
+        if model != st.session_state.get("cfg_model_val", ""):
+            st.session_state["cfg_model_val"] = model
+
+        base_url = st.text_input(
+            "Base URL",
+            value=st.session_state["cfg_base_url_val"],
+            key="cfg_base_url_input",
+            placeholder="https://api.openai.com/v1",
+            help="OpenAI 兼容接口的服务地址，不要以斜杠结尾"
+        )
+        if base_url != st.session_state.get("cfg_base_url_val", ""):
+            st.session_state["cfg_base_url_val"] = base_url
+
+    # 保存按钮
+    col_save, col_clear = st.columns([1, 1])
+    with col_save:
+        if st.button("保存配置", type="primary", width="stretch"):
+            # 如果用户没有手动填写 base_url，回退到 preset 默认值
+            final_base_url = base_url.strip() if base_url.strip() else selected_preset.get("base_url")
+            cfg = {
+                "provider": selected_preset["provider"],
+                "api_key": api_key,
+                "model": model,
+                "base_url": final_base_url,
+            }
+            st.session_state["ai_config"] = cfg
+            # 持久化到文件，刷新浏览器后配置不丢失
+            save_user_config(cfg)
+            # 清除缓存的 AI 分析器实例，使新配置立即生效
+            init_analyzer.clear()
+            init_parser.clear()
+            st.session_state["_config_saved"] = True
+            st.rerun()
+
+    with col_clear:
+        if st.button("清空当前配置", type="secondary", width="stretch"):
+            if "ai_config" in st.session_state:
+                del st.session_state["ai_config"]
+            for k in list(st.session_state.keys()):
+                if k.startswith("cfg_") or k.startswith("_preset_"):
+                    del st.session_state[k]
+            # 同时删除持久化的配置文件
+            clear_user_config()
+            init_analyzer.clear()
+            init_parser.clear()
+            st.info("已清空配置，将回退到文件默认值。")
+            st.rerun()
+
+    # 当前状态展示
+    st.markdown("#### 当前配置状态")
+    cfg = get_ai_config()
+    status_col1, status_col2, status_col3 = st.columns(3)
+    with status_col1:
+        has_key = bool(cfg.get("api_key") and cfg["api_key"] != "your-api-key-here")
+        st.metric(
+            "API 密钥",
+            "已填写" if has_key else "未配置",
+        )
+    with status_col2:
+        st.metric("当前模型", cfg.get("model", "—"))
+    with status_col3:
+        url = cfg.get("base_url")
+        st.metric("接口地址", "自定义" if url else "官方")
+
+
+# ========== 通用表格组件 ==========
+
+def show_table(candidates: List[Dict], result_type: str):
+    """显示表格"""
+    if not candidates:
+        st.info("暂无数据")
+        return
+
+    if result_type == "推荐":
+        columns = [
+            "序号", "岗位", "实习生", "沟通时间", "姓名", "手机号", "邮箱",
+            "性别", "出生年", "学校", "专业", "学历", "是否为应届生（2026届）",
+            "招聘渠道", "推荐沟通情况", "备注"
+        ]
+    else:
+        columns = [
+            "序号", "实习生", "沟通时间", "姓名", "手机号", "邮箱",
+            "性别", "出生年", "学校", "专业", "学历", "是否是应届生（2026届）",
+            "招聘渠道", "沟通状态", "沟通详情", "（淘汰模板）"
+        ]
+
+    df_data = []
+    for c in candidates:
+        if result_type == "推荐":
+            row = {
+                "序号": c["id"],
+                "岗位": "销售代表",
+                "实习生": c.get("intern_name") or "",
+                "沟通时间": c.get("communicate_time") or "",
+                "姓名": c["name"] or "",
+                "手机号": c["phone"] or "",
+                "邮箱": c.get("email") or "",
+                "性别": c.get("gender") or "",
+                "出生年": c.get("birth_year") or "",
+                "学校": c["school"] or "",
+                "专业": c["major"] or "",
+                "学历": c["education"] or "",
+                "是否为应届生（2026届）": c.get("is_fresh_grad") or "",
+                "招聘渠道": c.get("channel") or "",
+                "推荐沟通情况": c.get("description") or "",
+                "备注": c.get("remarks") or ""
+            }
+        else:
+            row = {
+                "序号": c["id"],
+                "实习生": c.get("intern_name") or "",
+                "沟通时间": c.get("communicate_time") or "",
+                "姓名": c["name"] or "",
+                "手机号": c["phone"] or "",
+                "邮箱": c.get("email") or "",
+                "性别": c.get("gender") or "",
+                "出生年": c.get("birth_year") or "",
+                "学校": c["school"] or "",
+                "专业": c["major"] or "",
+                "学历": c["education"] or "",
+                "是否是应届生（2026届）": c.get("is_fresh_grad") or "",
+                "招聘渠道": c.get("channel") or "",
+                "沟通状态": c.get("result") or "待审核",
+                "沟通详情": c.get("description") or "",
+                "（淘汰模板）": ""
+            }
+        df_data.append(row)
+
+    st.dataframe(df_data, width="stretch", hide_index=True)
+
+    # 显示沟通情况
+    with st.expander("查看沟通情况详情"):
+        for c in candidates:
+            st.markdown(f"**{c['name']}**")
+            _render_readonly_box(c.get("description", "无"), height=100)
+            st.divider()
+
+
+if __name__ == "__main__":
+    main()
