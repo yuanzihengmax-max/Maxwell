@@ -18,7 +18,7 @@ AI分析模块 —— 应用的"大脑"
 import json
 from typing import Dict
 
-from config import get_ai_config, SCORING_DIMENSIONS, DESCRIPTION_DIMENSIONS
+from config import get_ai_config, DESCRIPTION_DIMENSIONS
 
 
 class AIAnalyzer:
@@ -26,7 +26,10 @@ class AIAnalyzer:
     AI分析引擎
 
     用法示例：
-        analyzer = AIAnalyzer()
+        analyzer = AIAnalyzer(scoring_dimensions=[
+            {"dimension_name": "动机意愿", "weight": 0.25},
+            ...
+        ])
         result = analyzer.analyze_phone_record(
             phone_transcript="电话纪要内容...",
             resume_text="简历内容..."
@@ -35,9 +38,12 @@ class AIAnalyzer:
         print(result["total_score"])  # 总分
     """
 
-    def __init__(self):
+    def __init__(self, scoring_dimensions: list = None):
         """
         初始化AI引擎
+
+        参数:
+            scoring_dimensions: 评分维度配置列表，每项包含 dimension_name 和 weight
 
         如果API密钥未配置或缺少依赖库，client 设为 None，
         等真正调用分析时再给出具体错误提示。
@@ -47,6 +53,7 @@ class AIAnalyzer:
         self.client = None
         self.model = cfg.get("model", "gpt-4o-mini")
         self._init_error = None
+        self.scoring_dimensions = scoring_dimensions or []
 
         # 检查是不是还没填真实的密钥
         if not api_key or api_key == "your-api-key-here":
@@ -138,7 +145,9 @@ class AIAnalyzer:
         return {
             "description": result.get("description", ""),
             "scores": scores,
-            "total_score": total_score
+            "total_score": total_score,
+            "ai_score_details": dict(scores),
+            "ai_score_total": total_score,
         }
 
     def _get_system_prompt(self) -> str:
@@ -148,7 +157,18 @@ class AIAnalyzer:
         这是告诉AI"你是谁、你要做什么、怎么输出"的指令。
         我们把规则写清楚，AI就会按要求工作。
         """
-        return """你是一位专业的HR招聘分析师，专门负责销售岗位的招聘评估。
+        # 动态生成评分维度列表
+        dim_lines = "\n".join(
+            f"- {d.get('dimension_name', '')}"
+            for d in self.scoring_dimensions
+        )
+        # 动态生成示例 scores
+        example_scores = ",\n        ".join(
+            f'"{d.get("dimension_name", "")}": 4.0'
+            for d in self.scoring_dimensions
+        )
+
+        return f"""你是一位专业的HR招聘分析师，专门负责销售岗位的招聘评估。
 
 你的任务是根据候选人的简历和电话面试纪要，完成以下两项工作：
 
@@ -163,29 +183,17 @@ class AIAnalyzer:
 每个维度用简洁的语言总结关键信息。
 
 【任务二：评分】
-按照以下7个维度对候选人进行评分（1-5分，保留一位小数）：
-- 动机意愿
-- 销售基础能力
-- 沟通逻辑
-- 抗压韧性
-- 稳定性
-- 自我驱动力
-- 价值观归因
+按照以下维度对候选人进行评分（1-5分，保留一位小数）：
+{dim_lines}
 
 【输出格式】
 必须严格按照以下JSON格式输出，不要添加任何其他文字：
-{
+{{
     "description": "1、基本信息：...\\n2、求职动机&意向度：...\\n3、工作经验&职业规划：...\\n4、综合素质：...\\n5、接受度：...",
-    "scores": {
-        "动机意愿": 4.0,
-        "销售基础能力": 3.5,
-        "沟通逻辑": 4.0,
-        "抗压韧性": 3.0,
-        "稳定性": 4.0,
-        "自我驱动力": 3.5,
-        "价值观归因": 4.0
-    }
-}"""
+    "scores": {{
+        {example_scores}
+    }}
+}}"""
 
     def _build_analysis_prompt(self, phone_transcript: str, resume_text: str) -> str:
         """
@@ -195,8 +203,10 @@ class AIAnalyzer:
         如果没有电话纪要，只基于简历进行分析评分。
         """
         dimensions_desc = "\n".join([f"- {d}" for d in DESCRIPTION_DIMENSIONS])
+        # 动态生成评分维度及权重说明
         dimensions_score = "\n".join(
-            [f"- {k}（权重{v*100:.0f}%）" for k, v in SCORING_DIMENSIONS.items()]
+            f"- {d.get('dimension_name', '')}（权重{d.get('weight', 0)*100:.0f}%）"
+            for d in self.scoring_dimensions
         )
 
         has_transcript = phone_transcript and phone_transcript.strip()
@@ -216,7 +226,7 @@ class AIAnalyzer:
 {dimensions_desc}
 
 【任务二：评分】
-按以下7个维度评分（1-5分）：
+按以下维度评分（1-5分，保留一位小数）：
 {dimensions_score}
 
 {'如果有电话纪要，请结合简历和电话纪要综合评估；' if has_transcript else '由于无电话面试纪要，请仅基于简历内容进行合理推断评分。'}
@@ -226,17 +236,13 @@ class AIAnalyzer:
         """
         计算加权总分
 
-        每个维度有对应的权重（比如"动机意愿"占25%），
-        把各维度得分 × 权重后相加，就是总分。
-
-        例如：
-            动机意愿 4.0分 × 0.25 = 1.0
-            销售基础能力 3.5分 × 0.20 = 0.7
-            ...相加后总分 = 3.72
+        使用当前配置的评分维度权重进行计算。
         """
         total = 0.0
-        for dim, score in scores.items():
-            weight = SCORING_DIMENSIONS.get(dim, 0)
+        for d in self.scoring_dimensions:
+            dim_name = d.get("dimension_name", "")
+            weight = d.get("weight", 0)
+            score = scores.get(dim_name, 0)
             total += score * weight
         return round(total, 2)
 

@@ -16,9 +16,12 @@ from datetime import datetime
 from typing import List, Dict
 
 import re
+import shutil
+import sqlite3
+import uuid
 import streamlit as st
 
-from config import CHANNELS, SCORING_DIMENSIONS, AI_CONFIG, validate_ai_config, get_ai_config, save_user_config, clear_user_config
+from config import CHANNELS, SCORING_DIMENSIONS, AI_CONFIG, validate_ai_config, get_ai_config, save_user_config, clear_user_config, load_scoring_dimensions, validate_scoring_weights
 from modules.pdf_parser import PDFParser
 from modules.ai_analyzer import AIAnalyzer
 from modules.database import Database
@@ -288,10 +291,17 @@ div[data-testid="stVerticalBlockBorderWrapper"]:hover {
     border: 1.5px solid var(--border-light) !important;
     border-radius: 2px !important;
     color: var(--text-primary) !important;
+    caret-color: var(--text-primary) !important;
     font-size: 0.95rem !important;
     padding: 12px 16px !important;
     font-family: 'Noto Sans SC', 'PingFang SC', sans-serif !important;
     transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+}
+
+/* Number input */
+[data-testid="stNumberInput"] input {
+    color: var(--text-primary) !important;
+    caret-color: var(--text-primary) !important;
 }
 
 /* Selectbox: target the visible value container, not all nested divs */
@@ -637,8 +647,8 @@ def init_parser() -> PDFParser:
 
 
 @st.cache_resource
-def init_analyzer() -> AIAnalyzer:
-    return AIAnalyzer()
+def init_analyzer(scoring_dimensions: list = None) -> AIAnalyzer:
+    return AIAnalyzer(scoring_dimensions=scoring_dimensions)
 
 
 @st.cache_resource
@@ -647,23 +657,68 @@ def init_exporter() -> ExcelExporter:
 
 
 def get_database() -> Database:
-    """每个会话独立获取Database实例"""
-    return Database()
+    """每个会话独立获取Database实例（支持多用户隔离）"""
+    user_id = st.session_state.get("user_id", "").strip()
+    if user_id:
+        safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', user_id)
+        db_path = f"data/recruitment_{safe_id}.db"
+    else:
+        db_path = "data/recruitment.db"
+    db = Database(db_path=db_path)
+    db.init_default_scoring_config()
+    return db
 
 
 def get_modules():
     """获取模块实例"""
+    db = get_database()
+    scoring_dims = load_scoring_dimensions(db_instance=db)
     return {
         "pdf_parser": init_parser(),
-        "ai_analyzer": AIAnalyzer(),  # 不缓存，确保配置更改后立即生效
-        "database": get_database(),
-        "excel_exporter": init_exporter()
+        "ai_analyzer": AIAnalyzer(scoring_dimensions=scoring_dims),  # 不缓存，确保配置更改后立即生效
+        "database": db,
+        "excel_exporter": init_exporter(),
+        "scoring_dimensions": scoring_dims,
     }
 
 
 # ========== 主界面 ==========
 
 def main():
+    # ===== 用户标识（多用户隔离）=====
+    if "user_id" not in st.session_state:
+        st.session_state["user_id"] = ""
+
+    if not st.session_state["user_id"]:
+        st.markdown(
+            "<h1 style='margin-bottom: 0; color: var(--text-inverse) !important;'>"
+            "招聘助手"
+            "</h1>"
+            "<div class='title-rule'></div>",
+            unsafe_allow_html=True
+        )
+        st.markdown(
+            "<p class='secondary-text' style='margin-bottom: 1.5rem;'>"
+            "请输入您的用户标识，用于隔离您的 AI 配置和历史记录"
+            "</p>",
+            unsafe_allow_html=True
+        )
+        col_input, col_btn = st.columns([3, 1])
+        with col_input:
+            user_input = st.text_input(
+                "用户标识",
+                key="_user_id_input",
+                placeholder="例如：zhangsan",
+                label_visibility="collapsed",
+            )
+        with col_btn:
+            if st.button("确认", type="primary", use_container_width=True):
+                if user_input and user_input.strip():
+                    st.session_state["user_id"] = user_input.strip()
+                    st.rerun()
+        st.stop()
+        return
+
     # 页面标题 — 不对称编辑风格
     header_left, header_right = st.columns([3, 2])
     with header_left:
@@ -675,10 +730,14 @@ def main():
             unsafe_allow_html=True
         )
     with header_right:
+        user_id = st.session_state.get("user_id", "")
         st.markdown(
-            "<p class='subtitle' style='text-align: right; margin-top: 1.5rem;'>"
-            "销售岗位招聘管理系统"
-            "</p>",
+            f"<p class='subtitle' style='text-align: right; margin-top: 0.8rem;'>"
+            f"销售岗位招聘管理系统"
+            f"</p>"
+            f"<p style='text-align: right; font-size: 0.75rem; color: #6B8A72; margin-top: 0.2rem;'>"
+            f"当前用户：{user_id}"
+            f"</p>",
             unsafe_allow_html=True
         )
 
@@ -889,6 +948,9 @@ def process_candidates(files, transcripts, communicate_time, channel, intern_nam
                 "description": analysis.get("description", ""),
                 "score_details": scores,
                 "score_total": total_score,
+                "score_source": "ai",
+                "ai_score_details": analysis.get("ai_score_details", scores),
+                "ai_score_total": analysis.get("ai_score_total", total_score),
                 "result": None,
                 "phone_transcript": transcript,
                 "intern_name": intern_name,
@@ -954,13 +1016,15 @@ def show_pending_results():
                 scores = candidate.get("score_details", {})
                 if scores:
                     st.markdown("**评分详情**")
-                    for dim, weight in SCORING_DIMENSIONS.items():
-                        score = scores.get(dim, 0)
+                    for dim_cfg in modules["scoring_dimensions"]:
+                        dim_name = dim_cfg["dimension_name"]
+                        weight = dim_cfg["weight"]
+                        score = scores.get(dim_name, 0)
                         pct = (score / 5.0) * 100 if score else 0
                         st.markdown(
                             f"<div style='margin-bottom:10px;'>"
                             f"<div style='display:flex;justify-content:space-between;margin-bottom:4px;'>"
-                            f"<span style='color:var(--text-inverse);font-size:0.9rem;'>{dim}</span>"
+                            f"<span style='color:var(--text-inverse);font-size:0.9rem;'>{dim_name}</span>"
                             f"<span style='color:var(--accent);font-weight:600;'>{score:.1f}</span>"
                             f"</div>"
                             f"<div style='background:rgba(245,240,232,0.12);height:6px;border-radius:2px;'>"
@@ -1109,14 +1173,69 @@ def _format_candidate_row(c: dict) -> str:
 
 
 def _render_copy_button(text: str, btn_key: str):
-    """使用 pyperclip 复制到剪贴板，Streamlit 原生按钮样式"""
-    if st.button("复制", key=btn_key, use_container_width=True):
-        try:
-            import pyperclip
-            pyperclip.copy(text)
-            st.toast("已复制到剪贴板", icon="✅")
-        except Exception as e:
-            st.toast(f"复制失败: {e}", icon="❌")
+    """使用前端 JS 复制到剪贴板，不依赖后端库，线上/线下均可用"""
+    import json
+    import streamlit.components.v1 as components
+
+    safe_text = json.dumps(text, ensure_ascii=False)
+    copy_html = f"""
+    <div style="width:100%;">
+        <button id="copy-btn-{btn_key}"
+                style="width:100%;padding:0.4rem 1rem;border-radius:6px;background:#4A7C59;color:#F5F0E8;border:none;cursor:pointer;font-family:'Noto Sans SC',sans-serif;font-size:0.85rem;transition:background 0.2s;"
+                onmouseover="this.style.background='#3d6649'"
+                onmouseout="this.style.background='#4A7C59'">
+            📋 复制
+        </button>
+        <script>
+            (function() {{
+                var btn = document.getElementById('copy-btn-{btn_key}');
+                if (!btn) return;
+                btn.addEventListener('click', function() {{
+                    var t = {safe_text};
+                    if (navigator.clipboard && navigator.clipboard.writeText) {{
+                        navigator.clipboard.writeText(t).then(function() {{
+                            btn.textContent = '已复制 ✅';
+                            btn.style.background = '#2d5a3f';
+                            setTimeout(function() {{
+                                btn.textContent = '📋 复制';
+                                btn.style.background = '#4A7C59';
+                            }}, 2000);
+                        }}).catch(function() {{
+                            fallbackCopy(t);
+                        }});
+                    }} else {{
+                        fallbackCopy(t);
+                    }}
+                    function fallbackCopy(text) {{
+                        var ta = document.createElement('textarea');
+                        ta.value = text;
+                        ta.style.position = 'fixed';
+                        ta.style.opacity = '0';
+                        document.body.appendChild(ta);
+                        ta.select();
+                        try {{
+                            document.execCommand('copy');
+                            btn.textContent = '已复制 ✅';
+                            btn.style.background = '#2d5a3f';
+                            setTimeout(function() {{
+                                btn.textContent = '📋 复制';
+                                btn.style.background = '#4A7C59';
+                            }}, 2000);
+                        }} catch(e) {{
+                            btn.textContent = '请手动复制 ❌';
+                            setTimeout(function() {{
+                                btn.textContent = '📋 复制';
+                                btn.style.background = '#4A7C59';
+                            }}, 2000);
+                        }}
+                        document.body.removeChild(ta);
+                    }}
+                }});
+            }})();
+        </script>
+    </div>
+    """
+    components.html(copy_html, height=45)
 
 
 def show_candidate_detail(candidate_id: int):
@@ -1177,6 +1296,47 @@ def show_candidate_detail(candidate_id: int):
             edit_intern = st.text_input("跟进实习生", value=candidate.get("intern_name") or "", key=f"edit_intern_{candidate_id}")
             edit_remarks = st.text_input("备注", value=candidate.get("remarks") or "", key=f"edit_remarks_{candidate_id}")
 
+            # ===== 人工评分编辑 =====
+            st.markdown("**编辑评分**")
+            current_scores = candidate.get("score_details", {}) or {}
+            ai_scores = candidate.get("ai_score_details", {}) or {}
+            edited_scores = {}
+            score_total = 0.0
+
+            for dim_cfg in modules["scoring_dimensions"]:
+                dim_name = dim_cfg["dimension_name"]
+                weight = dim_cfg["weight"]
+                current_score = current_scores.get(dim_name, 0) or 0
+                edited_score = st.slider(
+                    dim_name,
+                    min_value=1.0,
+                    max_value=5.0,
+                    value=float(current_score) if current_score else 3.0,
+                    step=0.5,
+                    key=f"edit_score_{candidate_id}_{dim_name}",
+                )
+                edited_scores[dim_name] = edited_score
+                score_total += edited_score * weight
+
+            score_total = round(score_total, 2)
+            st.markdown(f"**加权总分：{score_total:.2f} / 5.0**")
+
+            # 重置按钮
+            reset_col, _ = st.columns([1, 3])
+            with reset_col:
+                if st.button("重置为 AI 评分", key=f"reset_ai_score_{candidate_id}"):
+                    if ai_scores:
+                        st.session_state[f"_reset_scores_{candidate_id}"] = True
+                        st.rerun()
+
+            # 检查是否有重置标记
+            if st.session_state.pop(f"_reset_scores_{candidate_id}", False):
+                for dim_cfg in modules["scoring_dimensions"]:
+                    dim_name = dim_cfg["dimension_name"]
+                    ai_val = ai_scores.get(dim_name, 3.0)
+                    st.session_state[f"edit_score_{candidate_id}_{dim_name}"] = float(ai_val)
+                st.rerun()
+
             save_col, cancel_col = st.columns([1, 1])
             with save_col:
                 if st.button("保存修改", type="primary", key=f"save_edit_{candidate_id}", width="stretch"):
@@ -1191,6 +1351,9 @@ def show_candidate_detail(candidate_id: int):
                         "is_fresh_grad": edit_fresh,
                         "intern_name": edit_intern,
                         "remarks": edit_remarks,
+                        "score_details": edited_scores,
+                        "score_total": score_total,
+                        "score_source": "manual",
                     }
                     if edit_birth.strip():
                         try:
@@ -1222,13 +1385,15 @@ def show_candidate_detail(candidate_id: int):
     with col1:
         st.metric("总分", f"{candidate['score_total'] or 0:.2f} / 5.0")
     with col2:
-        for dim, weight in SCORING_DIMENSIONS.items():
-            score = scores.get(dim, 0)
+        for dim_cfg in modules["scoring_dimensions"]:
+            dim_name = dim_cfg["dimension_name"]
+            weight = dim_cfg["weight"]
+            score = scores.get(dim_name, 0)
             pct = (score / 5.0) * 100 if score else 0
             st.markdown(
                 f"<div style='margin-bottom:10px;'>"
                 f"<div style='display:flex;justify-content:space-between;margin-bottom:4px;'>"
-                f"<span style='color:var(--text-inverse);font-size:0.9rem;'>{dim}</span>"
+                f"<span style='color:var(--text-inverse);font-size:0.9rem;'>{dim_name}</span>"
                 f"<span style='color:var(--accent);font-weight:600;'>{score:.1f}</span>"
                 f"</div>"
                 f"<div style='background:rgba(245,240,232,0.12);height:6px;border-radius:2px;'>"
@@ -1427,6 +1592,40 @@ def render_settings():
         unsafe_allow_html=True
     )
 
+    # ===== 用户标识管理 =====
+    with st.container(border=True):
+        st.markdown("#### 用户标识")
+        st.markdown(
+            "<p class='secondary-text' style='margin-bottom: 1rem;'>"
+            "不同用户标识之间的配置和历史记录完全隔离。更换标识后将加载对应用户的数据。"
+            "</p>",
+            unsafe_allow_html=True
+        )
+        current_user = st.session_state.get("user_id", "")
+        col_u1, col_u2 = st.columns([3, 1])
+        with col_u1:
+            new_user = st.text_input(
+                "用户标识",
+                value=current_user,
+                key="_settings_user_id",
+                placeholder="请输入用户标识",
+            )
+        with col_u2:
+            st.markdown("<div style='height: 1.8rem;'></div>", unsafe_allow_html=True)
+            if st.button("切换用户", type="primary", use_container_width=True, key="switch_user_btn"):
+                if new_user and new_user.strip():
+                    new_user = new_user.strip()
+                    if new_user != current_user:
+                        st.session_state["user_id"] = new_user
+                        # 清除缓存，让新用户的配置和数据生效
+                        for key in list(st.session_state.keys()):
+                            if key.startswith("_") and key != "user_id":
+                                del st.session_state[key]
+                        st.success(f"已切换到用户：{new_user}")
+                        st.rerun()
+                else:
+                    st.error("用户标识不能为空")
+
     # 读取当前配置（session_state → 用户文件 → 默认值）
     current = get_ai_config()
 
@@ -1548,6 +1747,431 @@ def render_settings():
     with status_col3:
         url = cfg.get("base_url")
         st.metric("接口地址", "自定义" if url else "官方")
+
+    st.divider()
+    render_scoring_config()
+
+    st.divider()
+    render_scoring_analysis()
+
+    st.divider()
+    render_data_management()
+
+
+def render_scoring_config():
+    """评分维度配置 UI"""
+    st.markdown("### 评分维度配置")
+    st.markdown(
+        "<p class='secondary-text' style='margin-bottom: 1.5rem;'>"
+        "配置 AI 评分的维度、权重和描述。权重之和必须等于 1.0，调整后点击保存生效"
+        "</p>",
+        unsafe_allow_html=True
+    )
+
+    db = get_database()
+    dimensions = db.get_scoring_dimensions(active_only=False)
+
+    # 用 session_state 管理编辑状态，避免每次交互重置
+    state_key = "_scoring_dims_edit"
+    if state_key not in st.session_state:
+        st.session_state[state_key] = [
+            {
+                "_id": str(uuid.uuid4())[:8],
+                "dimension_name": d["dimension_name"],
+                "weight": float(d["weight"]),
+                "description": d.get("description", ""),
+                "sort_order": d.get("sort_order", 0),
+                "is_active": bool(d.get("is_active", 1)),
+            }
+            for d in dimensions
+        ]
+
+    dims = st.session_state[state_key]
+
+    # 权重总和提示
+    total_weight = sum(d["weight"] for d in dims if d["is_active"])
+    weight_color = "#4A7C59" if abs(total_weight - 1.0) < 0.001 else "#C75B39"
+    st.markdown(
+        f"<p style='color: {weight_color}; font-size: 0.9rem; margin-bottom: 1rem;'>"
+        f"当前活跃维度权重之和：<strong>{total_weight:.3f}</strong>"
+        f"{' ✓' if abs(total_weight - 1.0) < 0.001 else '（必须等于 1.0）'}"
+        f"</p>",
+        unsafe_allow_html=True
+    )
+
+    # 列头
+    st.markdown("#### 维度列表")
+    header_cols = st.columns([3, 2, 4, 1])
+    with header_cols[0]:
+        st.markdown("<p style='color: #B8B2A6; font-size: 0.8rem; margin-bottom: 0.2rem;'>维度名称</p>", unsafe_allow_html=True)
+    with header_cols[1]:
+        st.markdown("<p style='color: #B8B2A6; font-size: 0.8rem; margin-bottom: 0.2rem;'>权重</p>", unsafe_allow_html=True)
+    with header_cols[2]:
+        st.markdown("<p style='color: #B8B2A6; font-size: 0.8rem; margin-bottom: 0.2rem;'>描述（用于 AI Prompt）</p>", unsafe_allow_html=True)
+    with header_cols[3]:
+        st.markdown("<p style='color: #B8B2A6; font-size: 0.8rem; margin-bottom: 0.2rem;'>操作</p>", unsafe_allow_html=True)
+
+    # 修复 number_input 在深色主题下文字颜色问题
+    st.markdown("""
+    <style>
+    [data-testid="stNumberInput"] input {
+        color: #1A2E22 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    to_remove = []
+
+    for i, dim in enumerate(dims):
+        uid = dim["_id"]
+        with st.container(border=True):
+            col1, col2, col3, col4 = st.columns([3, 2, 4, 1])
+            with col1:
+                new_name = st.text_input(
+                    "维度名称",
+                    value=dim["dimension_name"],
+                    key=f"dim_name_{uid}",
+                    label_visibility="collapsed",
+                    placeholder="维度名称",
+                )
+                dim["dimension_name"] = new_name.strip()
+            with col2:
+                new_weight = st.number_input(
+                    "权重",
+                    value=float(dim["weight"]),
+                    min_value=0.0,
+                    max_value=1.0,
+                    step=0.05,
+                    format="%.2f",
+                    key=f"dim_weight_{uid}",
+                    label_visibility="collapsed",
+                )
+                dim["weight"] = new_weight
+            with col3:
+                new_desc = st.text_input(
+                    "描述",
+                    value=dim.get("description", ""),
+                    key=f"dim_desc_{uid}",
+                    label_visibility="collapsed",
+                    placeholder="维度描述（用于 AI Prompt）",
+                )
+                dim["description"] = new_desc.strip()
+            with col4:
+                st.markdown("<div style='height: 0.5rem;'></div>", unsafe_allow_html=True)
+                if st.button("🗑️", key=f"dim_del_{uid}", help="删除此维度"):
+                    to_remove.append(i)
+
+    # 执行删除
+    for idx in reversed(to_remove):
+        dims.pop(idx)
+        st.rerun()
+
+    # 添加新维度
+    col_add, _ = st.columns([1, 3])
+    with col_add:
+        if st.button("➕ 添加维度", type="secondary"):
+            dims.append({
+                "_id": str(uuid.uuid4())[:8],
+                "dimension_name": "",
+                "weight": 0.0,
+                "description": "",
+                "sort_order": len(dims),
+                "is_active": True,
+            })
+            st.rerun()
+
+    # 操作按钮
+    col_save, col_reset = st.columns([1, 1])
+    with col_save:
+        if st.button("保存配置", type="primary", key="scoring_save"):
+            valid, err = validate_scoring_weights(dims)
+            if not valid:
+                st.error(f"保存失败：{err}")
+            else:
+                # 重新计算 sort_order
+                for idx, d in enumerate(dims):
+                    d["sort_order"] = idx
+                db.save_scoring_config(dims)
+                st.success("评分配置已保存")
+                st.rerun()
+
+    with col_reset:
+        if st.button("恢复默认", type="secondary", key="scoring_reset"):
+            defaults = db.get_default_dimensions()
+            db.save_scoring_config(defaults)
+            st.session_state[state_key] = [
+                {
+                    "_id": str(uuid.uuid4())[:8],
+                    "dimension_name": d["dimension_name"],
+                    "weight": float(d["weight"]),
+                    "description": d.get("description", ""),
+                    "sort_order": d.get("sort_order", 0),
+                    "is_active": bool(d.get("is_active", True)),
+                }
+                for d in defaults
+            ]
+            st.success("已恢复默认配置")
+            st.rerun()
+
+
+def render_scoring_analysis():
+    """迭代分析 UI —— AI 评分 vs 人工评分偏差统计"""
+    st.markdown("### 评分迭代分析")
+    st.markdown(
+        "<p class='secondary-text' style='margin-bottom: 1.5rem;'>"
+        "基于人工修正过的评分数据，分析 AI 评分的系统性偏差，优化权重配置"
+        "</p>",
+        unsafe_allow_html=True
+    )
+
+    db = get_database()
+    all_candidates = db.get_all_candidates()
+    # 只取有人工修正的
+    manual_candidates = [
+        c for c in all_candidates
+        if c.get("score_source") in ("manual", "mixed")
+        and c.get("ai_score_details")
+        and c.get("score_details")
+    ]
+
+    if len(manual_candidates) < 1:
+        st.info(
+            "暂无人工修正数据。请在候选人详情页的「编辑」模式下修改评分并保存，"
+            "此处将自动展示 AI 与人工评分的偏差分析。"
+        )
+        return
+
+    # 计算各维度偏差
+    dimensions = db.get_scoring_dimensions(active_only=True)
+    dim_names = [d["dimension_name"] for d in dimensions]
+
+    deviations = {}
+    counts = {}
+    ai_values = {}
+    manual_values = {}
+
+    for dim in dim_names:
+        deviations[dim] = []
+        ai_values[dim] = []
+        manual_values[dim] = []
+
+    for c in manual_candidates:
+        ai_scores = c.get("ai_score_details", {})
+        man_scores = c.get("score_details", {})
+        for dim in dim_names:
+            ai_s = ai_scores.get(dim)
+            man_s = man_scores.get(dim)
+            if ai_s is not None and man_s is not None:
+                try:
+                    deviations[dim].append(float(ai_s) - float(man_s))
+                    ai_values[dim].append(float(ai_s))
+                    manual_values[dim].append(float(man_s))
+                except (ValueError, TypeError):
+                    pass
+
+    # 统计表格
+    st.markdown(f"**基于 {len(manual_candidates)} 条人工修正数据**")
+
+    stats_data = []
+    for dim in dim_names:
+        vals = deviations.get(dim, [])
+        if vals:
+            avg_dev = sum(vals) / len(vals)
+            # 标准差
+            if len(vals) > 1:
+                mean = avg_dev
+                variance = sum((v - mean) ** 2 for v in vals) / len(vals)
+                std_dev = variance ** 0.5
+            else:
+                std_dev = 0.0
+            stats_data.append({
+                "维度": dim,
+                "样本数": len(vals),
+                "平均偏差 (AI-人工)": round(avg_dev, 2),
+                "标准差": round(std_dev, 2),
+            })
+
+    if stats_data:
+        import pandas as pd
+        st.dataframe(pd.DataFrame(stats_data), hide_index=True, use_container_width=True)
+
+        # 偏差柱状图（用 Altair 精确控制颜色）
+        chart_df = pd.DataFrame({
+            "维度": [s["维度"] for s in stats_data],
+            "平均偏差": [s["平均偏差 (AI-人工)"] for s in stats_data],
+        })
+        try:
+            import altair as alt
+            bar_chart = alt.Chart(chart_df).mark_bar(color="#D4A574").encode(
+                x=alt.X("维度", sort=None),
+                y=alt.Y("平均偏差", title="平均偏差 (AI - 人工)"),
+                tooltip=["维度", "平均偏差"],
+            )
+            st.altair_chart(bar_chart, use_container_width=True)
+        except Exception:
+            # 如果 Altair 不可用，回退到简单表格
+            st.dataframe(chart_df, hide_index=True, use_container_width=True)
+
+        # 优化建议
+        st.markdown("#### 优化建议")
+        suggestions = []
+        for s in stats_data:
+            dim = s["维度"]
+            avg_dev = s["平均偏差 (AI-人工)"]
+            if abs(avg_dev) > 0.5:
+                direction = "偏高" if avg_dev > 0 else "偏低"
+                suggestions.append(
+                    f"- **{dim}**：AI 评分系统性地 {direction}（平均偏差 {avg_dev:+.2f}），"
+                    f"建议调整该维度的 AI Prompt 描述或权重"
+                )
+
+        if suggestions:
+            for sg in suggestions:
+                st.markdown(sg)
+        else:
+            st.success("各维度偏差均在可接受范围内（≤0.5），AI 评分较为准确。")
+
+        # 基于数据的一键权重调整建议
+        st.markdown("#### 数据驱动的权重调整")
+        st.caption("根据人工修正数据，自动建议新的权重配置（实验性）")
+
+        if st.button("生成权重建议", type="secondary", key="gen_weight_suggestion"):
+            # 简单策略：如果 AI 在某维度持续偏高，降低权重；持续偏低，提高权重
+            # 使用 sigmoid 映射偏差到权重调整系数
+            import math
+            suggested = []
+            for d in dimensions:
+                dim_name = d["dimension_name"]
+                current_w = d["weight"]
+                # 找对应偏差
+                avg_dev = 0.0
+                for s in stats_data:
+                    if s["维度"] == dim_name:
+                        avg_dev = s["平均偏差 (AI-人工)"]
+                        break
+                # 调整因子：偏差为正（AI偏高）→ 降低权重；偏差为负 → 提高权重
+                # 用 tanh 限制调整幅度在 ±30% 内
+                factor = 1.0 - math.tanh(avg_dev * 1.5) * 0.3
+                suggested.append({
+                    "dimension_name": dim_name,
+                    "weight": current_w * factor,
+                    "description": d.get("description", ""),
+                    "sort_order": d.get("sort_order", 0),
+                    "is_active": True,
+                })
+
+            # 归一化，使总和为 1.0
+            total = sum(s["weight"] for s in suggested)
+            if total > 0:
+                for s in suggested:
+                    s["weight"] = round(s["weight"] / total, 4)
+
+            st.markdown("**建议权重：**")
+            suggestion_df = pd.DataFrame([
+                {"维度": s["dimension_name"], "当前权重": d["weight"], "建议权重": s["weight"]}
+                for s, d in zip(suggested, dimensions)
+            ])
+            st.dataframe(suggestion_df, hide_index=True, use_container_width=True)
+
+            if st.button("应用建议权重", type="primary", key="apply_suggested_weights"):
+                for idx, s in enumerate(suggested):
+                    s["sort_order"] = idx
+                db.save_scoring_config(suggested)
+                st.success("已应用建议权重")
+                st.rerun()
+    else:
+        st.warning("人工修正数据与当前维度不匹配，无法生成统计。")
+
+
+def render_data_management():
+    """数据管理 UI —— 导出/导入数据库"""
+    st.markdown("### 数据管理")
+    st.markdown(
+        "<p class='secondary-text' style='margin-bottom: 1.5rem;'>"
+        "导出数据库用于备份，或在重新部署后导入恢复数据。"
+        "不同用户的数据库文件相互独立。"
+        "</p>",
+        unsafe_allow_html=True,
+    )
+
+    # 获取当前用户的数据库路径（与 get_database 逻辑保持一致）
+    user_id = st.session_state.get("user_id", "").strip()
+    if user_id:
+        safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", user_id)
+        db_path = f"data/recruitment_{safe_id}.db"
+    else:
+        db_path = "data/recruitment.db"
+
+    # ===== 导出 =====
+    with st.container(border=True):
+        st.markdown("#### 导出数据")
+        if os.path.exists(db_path):
+            file_size = os.path.getsize(db_path)
+            with open(db_path, "rb") as f:
+                db_bytes = f.read()
+            st.download_button(
+                label=f"下载数据库备份（{file_size / 1024:.1f} KB）",
+                data=db_bytes,
+                file_name=os.path.basename(db_path),
+                mime="application/octet-stream",
+                key="export_db_btn",
+            )
+            st.caption(f"当前数据库路径：{db_path}")
+        else:
+            st.info("暂无数据库文件（可能还没有录入候选人数据）。")
+
+    # ===== 导入 =====
+    with st.container(border=True):
+        st.markdown("#### 导入数据")
+        uploaded = st.file_uploader(
+            "选择数据库文件（.db）",
+            type=["db"],
+            key="import_db_uploader",
+            help="上传之前导出的 .db 文件，将覆盖当前用户的数据。操作前建议先导出备份。",
+        )
+        if uploaded is not None:
+            # 先写入临时文件做校验
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp:
+                tmp.write(uploaded.getvalue())
+                tmp_path = tmp.name
+
+            is_valid = False
+            try:
+                conn = sqlite3.connect(tmp_path)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='candidates'"
+                )
+                is_valid = cursor.fetchone() is not None
+                conn.close()
+            except Exception:
+                is_valid = False
+
+            if not is_valid:
+                st.error("上传的文件不是有效的招聘助手数据库（缺少 candidates 表）。")
+                os.remove(tmp_path)
+                return
+
+            # 校验通过，执行导入
+            if st.button("确认导入并覆盖当前数据", type="primary", key="confirm_import_btn"):
+                # 备份当前数据库
+                if os.path.exists(db_path):
+                    backup_path = (
+                        db_path + ".backup." + datetime.now().strftime("%Y%m%d_%H%M%S")
+                    )
+                    shutil.copy2(db_path, backup_path)
+                    st.info(f"已自动备份现有数据库：{os.path.basename(backup_path)}")
+
+                try:
+                    os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+                    with open(db_path, "wb") as f:
+                        f.write(uploaded.getvalue())
+                    st.success("数据库导入成功！请刷新页面以加载新数据。")
+                except Exception as e:
+                    st.error(f"导入失败：{e}")
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
 
 
 # ========== 通用表格组件 ==========

@@ -11,6 +11,7 @@
 
 import json
 import os
+import re
 
 import streamlit as st
 
@@ -66,16 +67,28 @@ AI_CONFIG = {
     "base_url": None
 }
 
-# 用户配置文件路径（项目目录下）
-USER_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "ai_config.json")
+def _get_user_config_path() -> str:
+    """获取当前用户的配置文件路径，支持多用户隔离"""
+    base = os.path.dirname(__file__)
+    try:
+        import streamlit as st
+        user_id = st.session_state.get("user_id", "").strip()
+        if user_id:
+            # 对用户标识做简单清理，避免路径问题
+            safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', user_id)
+            return os.path.join(base, f"ai_config_{safe_id}.json")
+    except Exception:
+        pass
+    return os.path.join(base, "ai_config.json")
 
 
 def load_user_config() -> dict:
     """从文件加载用户保存的配置"""
-    if not os.path.exists(USER_CONFIG_PATH):
+    path = _get_user_config_path()
+    if not os.path.exists(path):
         return {}
     try:
-        with open(USER_CONFIG_PATH, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
             # 只保留有效的配置项
             return {
@@ -88,18 +101,20 @@ def load_user_config() -> dict:
 
 def save_user_config(config: dict) -> None:
     """将用户配置持久化到文件"""
+    path = _get_user_config_path()
     data = {
         k: v for k, v in config.items()
         if k in ("provider", "model", "api_key", "base_url")
     }
-    with open(USER_CONFIG_PATH, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 def clear_user_config() -> None:
     """清除持久化的用户配置"""
-    if os.path.exists(USER_CONFIG_PATH):
-        os.remove(USER_CONFIG_PATH)
+    path = _get_user_config_path()
+    if os.path.exists(path):
+        os.remove(path)
 
 
 def _load_secrets_config() -> dict:
@@ -160,3 +175,61 @@ def validate_ai_config() -> list[str]:
     if not cfg.get("api_key") or cfg.get("api_key") == "your-api-key-here":
         missing.append("AI_API_KEY")
     return missing
+
+
+# ========== 评分维度动态读取 ==========
+
+def load_scoring_dimensions(db_instance=None) -> list[dict]:
+    """
+    获取当前评分维度配置。
+    优先从数据库读取，如果数据库为空或无法读取则返回代码默认值。
+
+    参数:
+        db_instance: Database 实例（从 app.py 传入，避免循环导入）
+
+    返回:
+        维度列表，每项为 {"dimension_name": str, "weight": float, ...}
+    """
+    if db_instance is not None:
+        try:
+            dims = db_instance.get_scoring_dimensions(active_only=True)
+            if dims:
+                return dims
+        except Exception:
+            pass
+    # 回退到代码默认值
+    return [
+        {"dimension_name": k, "weight": v}
+        for k, v in SCORING_DIMENSIONS.items()
+    ]
+
+
+def validate_scoring_weights(dimensions: list[dict]) -> tuple[bool, str]:
+    """
+    校验评分权重配置是否合法。
+
+    参数:
+        dimensions: 维度列表
+
+    返回:
+        (是否合法, 错误信息)
+    """
+    if not dimensions:
+        return False, "至少需要配置一个评分维度"
+
+    total = sum(d.get("weight", 0) for d in dimensions)
+    if abs(total - 1.0) > 0.001:
+        return False, f"权重之和必须等于 1.0，当前为 {total:.3f}"
+
+    names = [d.get("dimension_name", "").strip() for d in dimensions]
+    if any(not n for n in names):
+        return False, "维度名称不能为空"
+    if len(names) != len(set(names)):
+        return False, "维度名称不能重复"
+
+    for d in dimensions:
+        w = d.get("weight", 0)
+        if w < 0 or w > 1:
+            return False, f"维度 '{d.get('dimension_name')}' 的权重必须在 0~1 之间"
+
+    return True, ""

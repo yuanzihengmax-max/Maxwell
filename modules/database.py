@@ -25,7 +25,8 @@ ALLOWED_UPDATE_FIELDS = {
     "name", "phone", "email", "gender", "birth_year", "school",
     "major", "education", "is_fresh_grad", "channel",
     "communicate_time", "description", "score_total",
-    "score_details", "result", "resume_raw_text", "phone_transcript",
+    "score_details", "score_source", "ai_score_details", "ai_score_total",
+    "result", "resume_raw_text", "phone_transcript",
     "remarks", "intern_name"
 }
 
@@ -101,6 +102,9 @@ class Database:
                     description TEXT,                       -- 台账描述（AI生成的内容）
                     score_total REAL,                       -- 总分（小数）
                     score_details TEXT,                     -- 各维度评分（存成JSON字符串）
+                    score_source TEXT DEFAULT 'ai',         -- 评分来源：ai / manual / mixed
+                    ai_score_details TEXT,                  -- AI原始各维度评分（JSON）
+                    ai_score_total REAL,                    -- AI原始总分
                     result TEXT,                            -- 结果：推荐 / 淘汰 / 空=待审核
                     resume_raw_text TEXT,                   -- 简历原始文本
                     phone_transcript TEXT,                  -- 电话纪要原文
@@ -108,6 +112,19 @@ class Database:
                     intern_name TEXT,                       -- 跟进实习生姓名
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,  -- 创建时间（自动填）
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP   -- 更新时间（自动填）
+                )
+            """)
+            # 评分维度配置表
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS scoring_config (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    dimension_name TEXT UNIQUE NOT NULL,
+                    weight REAL NOT NULL,
+                    description TEXT,
+                    sort_order INTEGER DEFAULT 0,
+                    is_active INTEGER DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             conn.commit()  # 保存更改
@@ -127,6 +144,16 @@ class Database:
             if "intern_name" not in existing_columns:
                 conn.execute("ALTER TABLE candidates ADD COLUMN intern_name TEXT")
                 conn.commit()
+            # 评分系统迭代：添加 score_source, ai_score_details, ai_score_total
+            if "score_source" not in existing_columns:
+                conn.execute("ALTER TABLE candidates ADD COLUMN score_source TEXT DEFAULT 'ai'")
+                conn.commit()
+            if "ai_score_details" not in existing_columns:
+                conn.execute("ALTER TABLE candidates ADD COLUMN ai_score_details TEXT")
+                conn.commit()
+            if "ai_score_total" not in existing_columns:
+                conn.execute("ALTER TABLE candidates ADD COLUMN ai_score_total REAL")
+                conn.commit()
 
     # ========== 增 ==========
 
@@ -145,9 +172,10 @@ class Database:
                 INSERT INTO candidates (
                     name, phone, email, gender, birth_year, school, major,
                     education, is_fresh_grad, channel, communicate_time,
-                    description, score_total, score_details, result,
+                    description, score_total, score_details, score_source,
+                    ai_score_details, ai_score_total, result,
                     resume_raw_text, phone_transcript, remarks, intern_name
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 data.get("name"),
                 data.get("phone"),
@@ -163,6 +191,9 @@ class Database:
                 data.get("description"),
                 data.get("score_total"),
                 json.dumps(data.get("score_details", {}), ensure_ascii=False),
+                data.get("score_source", "ai"),
+                json.dumps(data.get("ai_score_details", {}), ensure_ascii=False) if data.get("ai_score_details") else None,
+                data.get("ai_score_total"),
                 data.get("result"),
                 data.get("resume_raw_text"),
                 data.get("phone_transcript"),
@@ -285,6 +316,73 @@ class Database:
 
         return True
 
+    # ========== 评分配置 ==========
+
+    def get_scoring_dimensions(self, active_only: bool = True) -> List[Dict]:
+        """
+        获取评分维度配置列表
+
+        参数:
+            active_only: 是否只返回启用的维度
+
+        返回:
+            维度列表，每个维度包含 name, weight, description, sort_order
+        """
+        with self.get_connection() as conn:
+            if active_only:
+                rows = conn.execute(
+                    "SELECT * FROM scoring_config WHERE is_active = 1 ORDER BY sort_order, id"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM scoring_config ORDER BY sort_order, id"
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+    def save_scoring_config(self, dimensions: List[Dict]) -> None:
+        """
+        保存评分维度配置（覆盖式）
+
+        参数:
+            dimensions: 维度列表，每项包含 dimension_name, weight, description, sort_order, is_active
+        """
+        with self.get_connection() as conn:
+            # 清空现有配置
+            conn.execute("DELETE FROM scoring_config")
+            # 插入新配置
+            for dim in dimensions:
+                conn.execute("""
+                    INSERT INTO scoring_config
+                    (dimension_name, weight, description, sort_order, is_active)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (
+                    dim["dimension_name"],
+                    dim["weight"],
+                    dim.get("description", ""),
+                    dim.get("sort_order", 0),
+                    1 if dim.get("is_active", True) else 0
+                ))
+            conn.commit()
+
+    def get_default_dimensions(self) -> List[Dict]:
+        """返回默认的 7 维度评分配置"""
+        return [
+            {"dimension_name": "动机意愿", "weight": 0.25, "description": "候选人的求职动机和对岗位的意向程度", "sort_order": 0, "is_active": True},
+            {"dimension_name": "销售基础能力", "weight": 0.20, "description": "候选人是否具备销售岗位所需的基础能力和经验", "sort_order": 1, "is_active": True},
+            {"dimension_name": "沟通逻辑", "weight": 0.15, "description": "候选人的沟通表达能力和逻辑思维", "sort_order": 2, "is_active": True},
+            {"dimension_name": "抗压韧性", "weight": 0.15, "description": "候选人在压力下的承受能力和恢复能力", "sort_order": 3, "is_active": True},
+            {"dimension_name": "稳定性", "weight": 0.10, "description": "候选人的职业稳定性和留任意愿", "sort_order": 4, "is_active": True},
+            {"dimension_name": "自我驱动力", "weight": 0.10, "description": "候选人的主动性和自我激励能力", "sort_order": 5, "is_active": True},
+            {"dimension_name": "价值观归因", "weight": 0.05, "description": "候选人的价值观与公司文化的匹配度", "sort_order": 6, "is_active": True},
+        ]
+
+    def init_default_scoring_config(self) -> None:
+        """如果数据库中没有评分配置，则初始化默认配置"""
+        with self.get_connection() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM scoring_config").fetchone()[0]
+            if count == 0:
+                self.save_scoring_config(self.get_default_dimensions())
+
     # ========== 删 ==========
 
     def delete_candidate(self, candidate_id: int) -> bool:
@@ -319,5 +417,12 @@ class Database:
                 data["score_details"] = json.loads(data["score_details"])
             except json.JSONDecodeError:
                 data["score_details"] = {}  # 如果解析失败，就当成空字典
+
+        # AI 原始评分也做同样的解析
+        if data.get("ai_score_details"):
+            try:
+                data["ai_score_details"] = json.loads(data["ai_score_details"])
+            except json.JSONDecodeError:
+                data["ai_score_details"] = {}
 
         return data
