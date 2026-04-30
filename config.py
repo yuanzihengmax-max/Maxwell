@@ -62,9 +62,9 @@ EDUCATION_LEVELS = [
 # ========== AI配置 ==========
 AI_CONFIG = {
     "provider": "openai",
-    "model": "gpt-4o-mini",
-    "api_key": "your-api-key-here",
-    "base_url": None
+    "model": "Qwen/Qwen3-VL-8B-Thinking",
+    "api_key": "sk-ltumqpkjpyrebbqwzajpwyqamwwvgjtlwpmuihxfuoavqacr",
+    "base_url": "https://api.siliconflow.cn/v1"
 }
 
 def _get_user_config_path() -> str:
@@ -233,3 +233,70 @@ def validate_scoring_weights(dimensions: list[dict]) -> tuple[bool, str]:
             return False, f"维度 '{d.get('dimension_name')}' 的权重必须在 0~1 之间"
 
     return True, ""
+
+
+# ========== 模型单价配置 ==========
+
+def _get_pricing_config_path() -> str:
+    """获取模型单价配置文件路径，支持多用户隔离"""
+    base = os.path.dirname(__file__)
+    try:
+        import streamlit as st
+        user_id = st.session_state.get("user_id", "").strip()
+        if user_id:
+            safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', user_id)
+            return os.path.join(base, f"model_pricing_{safe_id}.json")
+    except Exception:
+        pass
+    return os.path.join(base, "model_pricing.json")
+
+
+def load_pricing_config() -> dict:
+    """加载用户保存的模型单价配置"""
+    path = _get_pricing_config_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return {}
+
+
+def save_pricing_config(pricing_dict: dict) -> None:
+    """保存模型单价配置到文件"""
+    path = _get_pricing_config_path()
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(pricing_dict, f, ensure_ascii=False, indent=2)
+
+
+def get_model_pricing(model_name: str) -> dict:
+    """
+    获取指定模型的单价配置
+
+    返回:
+        {"input": float, "output": float} 或 {}
+    """
+    cfg = load_pricing_config()
+    return cfg.get(model_name, {})
+
+
+def calculate_cost(model_name: str, prompt_tokens: int, completion_tokens: int) -> float:
+    """
+    计算 API 调用费用（人民币）
+
+    参数:
+        model_name: 模型名称
+        prompt_tokens: 输入 token 数
+        completion_tokens: 输出 token 数
+
+    返回:
+        估算费用（元），未配置价格的模型返回 0.0
+    """
+    pricing = get_model_pricing(model_name)
+    if not pricing:
+        return 0.0
+    input_price = pricing.get("input", 0)  # 元 / 百万 tokens
+    output_price = pricing.get("output", 0)
+    cost = (prompt_tokens * input_price + completion_tokens * output_price) / 1_000_000
+    return round(cost, 6)

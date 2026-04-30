@@ -127,6 +127,19 @@ class Database:
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            # API 使用记录表
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS api_usage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                    feature TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    prompt_tokens INTEGER DEFAULT 0,
+                    completion_tokens INTEGER DEFAULT 0,
+                    total_tokens INTEGER DEFAULT 0,
+                    estimated_cost REAL DEFAULT 0.0
+                )
+            """)
             conn.commit()  # 保存更改
 
     def _migrate_db(self):
@@ -382,6 +395,56 @@ class Database:
             count = conn.execute("SELECT COUNT(*) FROM scoring_config").fetchone()[0]
             if count == 0:
                 self.save_scoring_config(self.get_default_dimensions())
+
+    # ========== API 用量记录 ==========
+
+    def log_api_usage(self, feature: str, model: str, prompt_tokens: int,
+                      completion_tokens: int, estimated_cost: float) -> None:
+        """记录一次 API 调用"""
+        total = prompt_tokens + completion_tokens
+        with self.get_connection() as conn:
+            conn.execute("""
+                INSERT INTO api_usage
+                (feature, model, prompt_tokens, completion_tokens, total_tokens, estimated_cost)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (feature, model, prompt_tokens, completion_tokens, total, estimated_cost))
+            conn.commit()
+
+    def get_api_usage_summary(self, start_date: str, end_date: str) -> List[Dict]:
+        """按功能汇总指定日期范围内的 API 用量"""
+        with self.get_connection() as conn:
+            rows = conn.execute("""
+                SELECT
+                    feature,
+                    COUNT(*) as call_count,
+                    SUM(prompt_tokens) as prompt_tokens,
+                    SUM(completion_tokens) as completion_tokens,
+                    SUM(total_tokens) as total_tokens,
+                    SUM(estimated_cost) as total_cost
+                FROM api_usage
+                WHERE date(timestamp) BETWEEN ? AND ?
+                GROUP BY feature
+                ORDER BY total_cost DESC
+            """, (start_date, end_date)).fetchall()
+            return [dict(row) for row in rows]
+
+    def get_api_usage_details(self, start_date: str, end_date: str) -> List[Dict]:
+        """查询指定日期范围内的 API 调用明细"""
+        with self.get_connection() as conn:
+            rows = conn.execute("""
+                SELECT
+                    timestamp,
+                    feature,
+                    model,
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens,
+                    estimated_cost
+                FROM api_usage
+                WHERE date(timestamp) BETWEEN ? AND ?
+                ORDER BY timestamp DESC
+            """, (start_date, end_date)).fetchall()
+            return [dict(row) for row in rows]
 
     # ========== 删 ==========
 

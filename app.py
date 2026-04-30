@@ -21,7 +21,7 @@ import sqlite3
 import uuid
 import streamlit as st
 
-from config import CHANNELS, SCORING_DIMENSIONS, AI_CONFIG, validate_ai_config, get_ai_config, save_user_config, clear_user_config, load_scoring_dimensions, validate_scoring_weights
+from config import CHANNELS, SCORING_DIMENSIONS, AI_CONFIG, validate_ai_config, get_ai_config, save_user_config, clear_user_config, load_scoring_dimensions, validate_scoring_weights, load_pricing_config, save_pricing_config, calculate_cost
 from modules.pdf_parser import PDFParser
 from modules.ai_analyzer import AIAnalyzer
 from modules.database import Database
@@ -277,8 +277,8 @@ div[data-testid="stVerticalBlockBorderWrapper"]:hover {
 }
 
 .stButton > button:disabled {
-    background-color: var(--border-light) !important;
-    color: var(--text-muted) !important;
+    background-color: #C8C3B8 !important;
+    color: #3A4A3E !important;
     box-shadow: none !important;
     transform: none !important;
     cursor: not-allowed !important;
@@ -351,11 +351,134 @@ textarea[aria-disabled="true"],
     box-shadow: 0 0 0 3px var(--accent-glow) !important;
 }
 
-/* Date input */
-.stDateInput > div > div > input {
+/* Selectbox dropdown menu and options */
+[data-baseweb="menu"],
+[data-baseweb="menu"] > div,
+[data-baseweb="menu"] [role="listbox"] {
     background-color: var(--bg-elevated) !important;
-    border: 1.5px solid var(--border-light) !important;
-    border-radius: 2px !important;
+    color: #1A2E22 !important;
+}
+
+[data-baseweb="menu"] [role="option"],
+[data-baseweb="menu"] li {
+    color: #1A2E22 !important;
+    background-color: var(--bg-elevated) !important;
+}
+
+[data-baseweb="menu"] [role="option"]:hover,
+[data-baseweb="menu"] [role="option"][aria-selected="true"],
+[data-baseweb="menu"] li:hover {
+    background-color: var(--accent-light) !important;
+    color: #1A2E22 !important;
+}
+
+/* Selectbox arrow icon */
+.stSelectbox svg[data-testid="stIconChevronDown"] {
+    color: #1A2E22 !important;
+    fill: #1A2E22 !important;
+}
+
+/* ALL interactive icons inside light form inputs — force dark for visibility */
+.stTextInput svg, .stTextInput [data-testid] svg,
+.stTextArea svg, .stTextArea [data-testid] svg,
+.stSelectbox svg, .stSelectbox [data-testid] svg,
+.stDateInput svg, .stDateInput [data-testid] svg,
+[data-testid="stNumberInput"] svg, [data-testid="stNumberInput"] [data-testid] svg {
+    color: #1A2E22 !important;
+    fill: #1A2E22 !important;
+    stroke: #1A2E22 !important;
+}
+
+/* Buttons inside inputs: password toggle, clear button, calendar picker, stepper */
+.stTextInput button,
+.stTextArea button,
+.stSelectbox button,
+.stDateInput button,
+[data-testid="stNumberInput"] button {
+    color: #1A2E22 !important;
+}
+.stTextInput button svg,
+.stTextArea button svg,
+.stSelectbox button svg,
+.stDateInput button svg,
+[data-testid="stNumberInput"] button svg {
+    color: #1A2E22 !important;
+    fill: #1A2E22 !important;
+    stroke: #1A2E22 !important;
+}
+
+/* Placeholder text: darker for contrast on light input bg */
+.stTextInput input::placeholder,
+.stTextArea textarea::placeholder,
+.stDateInput input::placeholder,
+[data-testid="stNumberInput"] input::placeholder {
+    color: #3A5A45 !important;
+    opacity: 1 !important;
+}
+
+/* Buttons inside light cards: force dark background so they stand out */
+[data-testid="stVerticalBlockBorderWrapper"] .stButton > button,
+[data-testid="stVerticalBlockBorderWrapper"] .stButton > button[kind="primary"],
+[data-testid="stVerticalBlockBorderWrapper"] .stButton > button[kind="secondary"] {
+    background-color: #1A2E22 !important;
+    color: #F5F0E8 !important;
+    border: 1.5px solid #3A4A3E !important;
+    box-shadow: none !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"] .stButton > button:hover,
+[data-testid="stVerticalBlockBorderWrapper"] .stButton > button[kind="primary"]:hover,
+[data-testid="stVerticalBlockBorderWrapper"] .stButton > button[kind="secondary"]:hover {
+    background-color: #0F1E15 !important;
+    border-color: #B87A4A !important;
+    color: #B87A4A !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"] .stButton > button:disabled {
+    background-color: #C8C3B8 !important;
+    color: #3A4A3E !important;
+    border-color: #B8B2A6 !important;
+}
+
+/* Date input — comprehensive fix for dark-theme text visibility.
+   Streamlit 1.50+ uses Base Web MaskedInput for st.date_input.
+   The placeholder is rendered as a separate aria-hidden div, NOT as
+   a native ::placeholder, so we must target both. */
+[data-testid="stDateInput"] input,
+.stDateInput input {
+    color: #1A2E22 !important;
+    -webkit-text-fill-color: #1A2E22 !important;
+    caret-color: #1A2E22 !important;
+}
+
+/* Base Web MaskedInput placeholder div (aria-hidden, sits before <input>) */
+[data-testid="stDateInput"] div[aria-hidden="true"]:has(+ input),
+.stDateInput div[aria-hidden="true"]:has(+ input) {
+    color: #3A5A45 !important;
+}
+/* Fallback for browsers without :has() support */
+[data-testid="stDateInput"] [aria-hidden="true"],
+.stDateInput [aria-hidden="true"] {
+    color: #3A5A45 !important;
+}
+
+/* Native ::placeholder (kept as a safety net) */
+[data-testid="stDateInput"] input::placeholder,
+.stDateInput input::placeholder {
+    color: #3A5A45 !important;
+    opacity: 1 !important;
+    -webkit-text-fill-color: #3A5A45 !important;
+}
+
+/* Date-input label */
+[data-testid="stDateInput"] label,
+.stDateInput label {
+    color: #1A2E22 !important;
+}
+
+/* Calendar picker icon */
+[data-testid="stDateInput"] input::-webkit-calendar-picker-indicator,
+.stDateInput input::-webkit-calendar-picker-indicator {
+    filter: invert(0.3) !important;
+    cursor: pointer !important;
 }
 
 /* ===== 9. File Uploader ===== */
@@ -638,6 +761,34 @@ div[data-testid="stVerticalBlockBorderWrapper"]:nth-child(4) { animation-delay: 
 # 注入 CSS
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
+# JS 兜底：强制修复日期选择器文字颜色（Base Web/Styletron 会动态注入原子 CSS，
+# 偶尔覆盖我们的规则；这段脚本通过 MutationObserver 在组件挂载后立即修正颜色）
+st.markdown("""
+<script>
+(function() {
+    if (window.__dateInputFixApplied) return;
+    window.__dateInputFixApplied = true;
+
+    function fixDateInputs() {
+        // 1. 修复 input 本体文字
+        document.querySelectorAll('[data-testid="stDateInput"] input').forEach(function(el) {
+            el.style.setProperty('color', '#1A2E22', 'important');
+            el.style.setProperty('-webkit-text-fill-color', '#1A2E22', 'important');
+        });
+        // 2. 修复 Base Web 的 placeholder div（aria-hidden 的文本节点）
+        document.querySelectorAll('[data-testid="stDateInput"] [aria-hidden="true"]').forEach(function(el) {
+            if (el.children.length === 0 && el.textContent.trim().length > 0) {
+                el.style.setProperty('color', '#3A5A45', 'important');
+            }
+        });
+    }
+
+    fixDateInputs();
+    var observer = new MutationObserver(fixDateInputs);
+    observer.observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+""", unsafe_allow_html=True)
 
 # ========== 模块初始化 ==========
 
@@ -675,7 +826,7 @@ def get_modules():
     scoring_dims = load_scoring_dimensions(db_instance=db)
     return {
         "pdf_parser": init_parser(),
-        "ai_analyzer": AIAnalyzer(scoring_dimensions=scoring_dims),  # 不缓存，确保配置更改后立即生效
+        "ai_analyzer": AIAnalyzer(scoring_dimensions=scoring_dims, db_instance=db),  # 不缓存，确保配置更改后立即生效
         "database": db,
         "excel_exporter": init_exporter(),
         "scoring_dimensions": scoring_dims,
@@ -733,7 +884,7 @@ def main():
         user_id = st.session_state.get("user_id", "")
         st.markdown(
             f"<p class='subtitle' style='text-align: right; margin-top: 0.8rem;'>"
-            f"销售岗位招聘管理系统"
+            f"销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v5</span>"
             f"</p>"
             f"<p style='text-align: right; font-size: 0.75rem; color: #6B8A72; margin-top: 0.2rem;'>"
             f"当前用户：{user_id}"
@@ -820,17 +971,29 @@ def render_add_candidate():
         col1, col2 = st.columns(2)
         with col1:
             communicate_date = st.date_input("沟通日期", datetime.now())
+            time_options = [f"{h:02d}:{m:02d}" for h in range(9, 19) for m in [0, 30]]
+            now = datetime.now()
+            # 将当前时间取整到最接近的半小时
+            if now.minute < 15:
+                rounded_h, rounded_m = now.hour, 0
+            elif now.minute < 45:
+                rounded_h, rounded_m = now.hour, 30
+            else:
+                rounded_h, rounded_m = now.hour + 1, 0
+            rounded_str = f"{rounded_h:02d}:{rounded_m:02d}"
+            time_index = time_options.index(rounded_str) if rounded_str in time_options else 10
             communicate_time = st.selectbox(
                 "沟通时间",
-                options=[f"{h:02d}:{m:02d}" for h in range(9, 19) for m in [0, 30]],
-                index=10
+                options=time_options,
+                index=time_index
             )
         with col2:
             channel = st.selectbox("招聘渠道", CHANNELS)
 
-        # 实习生姓名：记住最后一次输入，同一会话中自动填充
+        # 实习生姓名：优先用当前登录用户，记住最后一次输入
+        default_intern = st.session_state.get("user_id", "")
         if "last_intern_name" not in st.session_state:
-            st.session_state["last_intern_name"] = ""
+            st.session_state["last_intern_name"] = default_intern
         intern_name = st.text_input(
             "跟进实习生",
             value=st.session_state["last_intern_name"],
@@ -923,7 +1086,7 @@ def process_candidates(files, transcripts, communicate_time, channel, intern_nam
 
         try:
             # 1. 解析简历
-            resume_data = modules["pdf_parser"].parse_resume(tmp_path)
+            resume_data = modules["pdf_parser"].parse_resume(tmp_path, modules["ai_analyzer"])
 
             # 2. 姓名兜底：如果PDF没解析到，尝试从文件名提取
             if not resume_data.get("name"):
@@ -982,6 +1145,16 @@ def show_pending_results():
     pending = st.session_state["pending_candidates"]
 
     st.success(f"成功处理 {len(pending)} 位候选人")
+
+    # 展示 vision 模型不支持的照片识别错误提示
+    vision_err = st.session_state.pop("_gender_vision_error", None)
+    if vision_err:
+        st.warning(vision_err, icon="📷")
+
+    # 展示照片提取错误提示
+    photo_err = st.session_state.pop("_photo_extract_error", None)
+    if photo_err:
+        st.info(photo_err, icon="📄")
 
     modules = get_modules()
 
@@ -1181,10 +1354,10 @@ def _render_copy_button(text: str, btn_key: str):
     copy_html = f"""
     <div style="width:100%;">
         <button id="copy-btn-{btn_key}"
-                style="width:100%;padding:0.4rem 1rem;border-radius:6px;background:#4A7C59;color:#F5F0E8;border:none;cursor:pointer;font-family:'Noto Sans SC',sans-serif;font-size:0.85rem;transition:background 0.2s;"
-                onmouseover="this.style.background='#3d6649'"
-                onmouseout="this.style.background='#4A7C59'">
-            📋 复制
+                style="width:100%;padding:0.4rem 1rem;border-radius:2px;background:#B87A4A;color:#F5F0E8;border:none;cursor:pointer;font-family:'Noto Sans SC','PingFang SC',sans-serif;font-size:0.85rem;font-weight:500;transition:background 0.2s;box-shadow:0 1px 2px rgba(0,0,0,0.15);"
+                onmouseover="this.style.background='#A0683E'"
+                onmouseout="this.style.background='#B87A4A'">
+            复制
         </button>
         <script>
             (function() {{
@@ -1194,11 +1367,11 @@ def _render_copy_button(text: str, btn_key: str):
                     var t = {safe_text};
                     if (navigator.clipboard && navigator.clipboard.writeText) {{
                         navigator.clipboard.writeText(t).then(function() {{
-                            btn.textContent = '已复制 ✅';
+                            btn.textContent = '已复制';
                             btn.style.background = '#2d5a3f';
                             setTimeout(function() {{
-                                btn.textContent = '📋 复制';
-                                btn.style.background = '#4A7C59';
+                                btn.textContent = '复制';
+                                btn.style.background = '#B87A4A';
                             }}, 2000);
                         }}).catch(function() {{
                             fallbackCopy(t);
@@ -1215,17 +1388,17 @@ def _render_copy_button(text: str, btn_key: str):
                         ta.select();
                         try {{
                             document.execCommand('copy');
-                            btn.textContent = '已复制 ✅';
+                            btn.textContent = '已复制';
                             btn.style.background = '#2d5a3f';
                             setTimeout(function() {{
-                                btn.textContent = '📋 复制';
-                                btn.style.background = '#4A7C59';
+                                btn.textContent = '复制';
+                                btn.style.background = '#B87A4A';
                             }}, 2000);
                         }} catch(e) {{
-                            btn.textContent = '请手动复制 ❌';
+                            btn.textContent = '复制失败';
                             setTimeout(function() {{
-                                btn.textContent = '📋 复制';
-                                btn.style.background = '#4A7C59';
+                                btn.textContent = '复制';
+                                btn.style.background = '#B87A4A';
                             }}, 2000);
                         }}
                         document.body.removeChild(ta);
@@ -1749,6 +1922,12 @@ def render_settings():
         st.metric("接口地址", "自定义" if url else "官方")
 
     st.divider()
+    render_pricing_config()
+
+    st.divider()
+    render_api_billing()
+
+    st.divider()
     render_scoring_config()
 
     st.divider()
@@ -2081,6 +2260,158 @@ def render_scoring_analysis():
                 st.rerun()
     else:
         st.warning("人工修正数据与当前维度不匹配，无法生成统计。")
+
+
+def render_pricing_config():
+    """模型单价配置 UI"""
+    st.markdown("### 模型单价配置")
+    st.markdown(
+        "<p class='secondary-text' style='margin-bottom: 1.5rem;'>"
+        "配置各模型的输入/输出单价（元 / 百万 tokens），用于估算 API 费用。"
+        "未配置价格的模型，费用将显示为 0。"
+        "</p>",
+        unsafe_allow_html=True,
+    )
+
+    # 加载当前配置
+    pricing_cfg = load_pricing_config()
+    state_key = "_pricing_edit"
+    if state_key not in st.session_state:
+        st.session_state[state_key] = [
+            {"_id": str(uuid.uuid4())[:8], "model": k, "input": float(v.get("input", 0)), "output": float(v.get("output", 0))}
+            for k, v in pricing_cfg.items()
+        ]
+
+    models = st.session_state[state_key]
+
+    # 显示已有模型配置
+    for i, item in enumerate(models):
+        cols = st.columns([3, 2, 2, 1])
+        with cols[0]:
+            item["model"] = st.text_input(
+                "模型名称", value=item["model"], key=f"pricing_model_{item['_id']}"
+            )
+        with cols[1]:
+            item["input"] = st.number_input(
+                "输入单价", value=float(item["input"]), min_value=0.0, step=0.1,
+                format="%.2f", key=f"pricing_input_{item['_id']}"
+            )
+        with cols[2]:
+            item["output"] = st.number_input(
+                "输出单价", value=float(item["output"]), min_value=0.0, step=0.1,
+                format="%.2f", key=f"pricing_output_{item['_id']}"
+            )
+        with cols[3]:
+            st.markdown("<div style='height: 1.8rem;'></div>", unsafe_allow_html=True)
+            if st.button("删除", key=f"pricing_del_{item['_id']}"):
+                models.pop(i)
+                st.rerun()
+
+    col_add, col_save = st.columns([1, 1])
+    with col_add:
+        if st.button("+ 添加模型", type="secondary", use_container_width=True):
+            models.append({"_id": str(uuid.uuid4())[:8], "model": "", "input": 0.0, "output": 0.0})
+            st.rerun()
+
+    with col_save:
+        if st.button("保存价格配置", type="primary", use_container_width=True):
+            data = {}
+            for item in models:
+                name = item["model"].strip()
+                if name:
+                    data[name] = {
+                        "input": float(item["input"]),
+                        "output": float(item["output"]),
+                    }
+            save_pricing_config(data)
+            st.success("价格配置已保存")
+
+
+def render_api_billing():
+    """API 使用账单 UI"""
+    st.markdown("### API 使用账单")
+
+    from datetime import datetime, timedelta
+
+    db = get_database()
+
+    # 日期范围选择
+    col1, col2 = st.columns(2)
+    with col1:
+        start_date = st.date_input(
+            "开始日期",
+            value=datetime.now() - timedelta(days=30),
+            key="billing_start",
+        )
+    with col2:
+        end_date = st.date_input(
+            "结束日期",
+            value=datetime.now(),
+            key="billing_end",
+        )
+
+    start_str = start_date.strftime("%Y-%m-%d")
+    end_str = end_date.strftime("%Y-%m-%d")
+
+    # 查询数据
+    summary = db.get_api_usage_summary(start_str, end_str)
+    details = db.get_api_usage_details(start_str, end_str)
+
+    # 汇总卡片
+    total_calls = sum(s["call_count"] for s in summary)
+    total_tokens = sum(s["total_tokens"] for s in summary)
+    total_cost = sum(s["total_cost"] for s in summary)
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("总调用次数", f"{total_calls}")
+    with c2:
+        st.metric("总 Token 消耗", f"{total_tokens:,}")
+    with c3:
+        st.metric("估算总费用", f"¥{total_cost:.4f}")
+
+    if not summary:
+        st.info("所选时间段内暂无 API 使用记录。")
+        return
+
+    # 按功能分组表格
+    st.markdown("#### 按功能汇总")
+    summary_data = []
+    for s in summary:
+        summary_data.append({
+            "功能": s["feature"],
+            "调用次数": s["call_count"],
+            "输入 Tokens": s["prompt_tokens"],
+            "输出 Tokens": s["completion_tokens"],
+            "总 Tokens": s["total_tokens"],
+            "估算费用": f"¥{s['total_cost']:.4f}",
+        })
+    st.dataframe(summary_data, use_container_width=True, hide_index=True)
+
+    # 明细列表
+    with st.expander("查看调用明细"):
+        detail_data = []
+        for d in details:
+            detail_data.append({
+                "时间": d["timestamp"],
+                "功能": d["feature"],
+                "模型": d["model"],
+                "输入 Tokens": d["prompt_tokens"],
+                "输出 Tokens": d["completion_tokens"],
+                "总 Tokens": d["total_tokens"],
+                "估算费用": f"¥{d['estimated_cost']:.6f}",
+            })
+        st.dataframe(detail_data, use_container_width=True, hide_index=True)
+
+    # 未配置价格模型提示
+    used_models = {d["model"] for d in details}
+    priced_models = set(load_pricing_config().keys())
+    unpriced = used_models - priced_models
+    if unpriced:
+        st.warning(
+            f"以下模型尚未配置单价，费用计为 0：{', '.join(unpriced)}。"
+            "请在上方「模型单价配置」中补全。"
+        )
 
 
 def render_data_management():

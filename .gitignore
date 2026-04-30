@@ -6,6 +6,8 @@ data/
 
 # 本地配置（含敏感信息）
 ai_config.json
+ai_config_*.json
+model_pricing_*.json
 
 # Python
 __pycache__/

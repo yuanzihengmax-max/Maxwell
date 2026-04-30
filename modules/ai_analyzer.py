@@ -18,7 +18,7 @@ AI分析模块 —— 应用的"大脑"
 import json
 from typing import Dict
 
-from config import get_ai_config, DESCRIPTION_DIMENSIONS
+from config import get_ai_config, DESCRIPTION_DIMENSIONS, calculate_cost
 
 
 class AIAnalyzer:
@@ -38,12 +38,13 @@ class AIAnalyzer:
         print(result["total_score"])  # 总分
     """
 
-    def __init__(self, scoring_dimensions: list = None):
+    def __init__(self, scoring_dimensions: list = None, db_instance=None):
         """
         初始化AI引擎
 
         参数:
             scoring_dimensions: 评分维度配置列表，每项包含 dimension_name 和 weight
+            db_instance: Database 实例，用于记录 API 用量
 
         如果API密钥未配置或缺少依赖库，client 设为 None，
         等真正调用分析时再给出具体错误提示。
@@ -54,6 +55,7 @@ class AIAnalyzer:
         self.model = cfg.get("model", "gpt-4o-mini")
         self._init_error = None
         self.scoring_dimensions = scoring_dimensions or []
+        self.db = db_instance
 
         # 检查是不是还没填真实的密钥
         if not api_key or api_key == "your-api-key-here":
@@ -112,20 +114,50 @@ class AIAnalyzer:
         try:
             from openai import APIError, AuthenticationError
 
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": self._get_system_prompt()},
-                    {"role": "user", "content": prompt}
-                ],
-                response_format={"type": "json_object"}  # 要求AI返回JSON格式
-            )
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": self._get_system_prompt()},
+                        {"role": "user", "content": prompt}
+                    ],
+                    response_format={"type": "json_object"}  # 要求AI返回JSON格式
+                )
+            except APIError as e:
+                err_msg = str(e).lower()
+                # 如果是因为 response_format 不支持，降级重试
+                if any(k in err_msg for k in ("response_format", "json_object", "unsupported")):
+                    response = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[
+                            {"role": "system", "content": self._get_system_prompt()},
+                            {"role": "user", "content": prompt}
+                        ]
+                    )
+                else:
+                    raise
         except AuthenticationError:
             raise RuntimeError("API密钥错误！请检查系统配置中的 API 密钥是否正确。")
         except APIError as e:
             raise RuntimeError(f"AI服务出错了：{e}")
         except Exception as e:
             raise RuntimeError(f"调用AI时发生未知错误：{e}")
+
+        # 记录 API 用量
+        if self.db and hasattr(response, "usage") and response.usage:
+            try:
+                pt = response.usage.prompt_tokens or 0
+                ct = response.usage.completion_tokens or 0
+                cost = calculate_cost(self.model, pt, ct)
+                self.db.log_api_usage(
+                    feature="phone_analysis",
+                    model=self.model,
+                    prompt_tokens=pt,
+                    completion_tokens=ct,
+                    estimated_cost=cost,
+                )
+            except Exception:
+                pass  # 用量记录失败不影响主流程
 
         # 获取AI返回的内容
         content = response.choices[0].message.content
@@ -134,7 +166,7 @@ class AIAnalyzer:
 
         # 解析JSON
         try:
-            result = json.loads(content)
+            result = self._parse_json(content)
         except json.JSONDecodeError as e:
             raise RuntimeError(f"AI返回的内容不是有效的JSON格式：{e}")
 
@@ -246,6 +278,38 @@ class AIAnalyzer:
             total += score * weight
         return round(total, 2)
 
+    @staticmethod
+    def _parse_json(text: str) -> Dict:
+        """
+        解析AI返回的JSON内容。
+
+        兼容以下情况：
+        1. 纯JSON字符串
+        2. 被 markdown 代码块包裹的 JSON（如 ```json {...} ```）
+        """
+        text = text.strip()
+        # 尝试直接解析
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+        # 尝试提取 markdown 代码块中的 JSON
+        if text.startswith("```"):
+            # 去掉开头的 ```json 或 ```
+            lines = text.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+            return json.loads(text)
+        # 尝试从文本中找第一个 { 和最后一个 }
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return json.loads(text[start:end + 1])
+        raise json.JSONDecodeError("无法解析JSON", text, 0)
+
     def extract_missing_info(self, resume_text: str) -> Dict:
         """
         让AI从简历中提取可能漏掉的信息
@@ -284,13 +348,25 @@ class AIAnalyzer:
         try:
             from openai import APIError, AuthenticationError
 
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                response_format={"type": "json_object"}
-            )
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ],
+                    response_format={"type": "json_object"}
+                )
+            except APIError as e:
+                err_msg = str(e).lower()
+                if any(k in err_msg for k in ("response_format", "json_object", "unsupported")):
+                    response = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[
+                            {"role": "user", "content": prompt}
+                        ]
+                    )
+                else:
+                    raise
         except AuthenticationError:
             raise RuntimeError("API密钥错误！请检查系统配置中的 API 密钥是否正确。")
         except APIError as e:
@@ -303,6 +379,6 @@ class AIAnalyzer:
             raise RuntimeError("AI返回了空内容，请重试。")
 
         try:
-            return json.loads(content)
+            return self._parse_json(content)
         except json.JSONDecodeError as e:
             raise RuntimeError(f"AI返回的内容不是有效的JSON格式：{e}")
