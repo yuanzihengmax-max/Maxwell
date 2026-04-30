@@ -865,7 +865,12 @@ def main():
         with col_btn:
             if st.button("确认", type="primary", use_container_width=True):
                 if user_input and user_input.strip():
-                    st.session_state["user_id"] = user_input.strip()
+                    new_user = user_input.strip()
+                    # 彻底清除旧会话状态，防止数据残留
+                    for key in list(st.session_state.keys()):
+                        if key != "user_id":
+                            del st.session_state[key]
+                    st.session_state["user_id"] = new_user
                     st.rerun()
         st.stop()
         return
@@ -971,22 +976,6 @@ def render_add_candidate():
         col1, col2 = st.columns(2)
         with col1:
             communicate_date = st.date_input("沟通日期", datetime.now())
-            time_options = [f"{h:02d}:{m:02d}" for h in range(9, 19) for m in [0, 30]]
-            now = datetime.now()
-            # 将当前时间取整到最接近的半小时
-            if now.minute < 15:
-                rounded_h, rounded_m = now.hour, 0
-            elif now.minute < 45:
-                rounded_h, rounded_m = now.hour, 30
-            else:
-                rounded_h, rounded_m = now.hour + 1, 0
-            rounded_str = f"{rounded_h:02d}:{rounded_m:02d}"
-            time_index = time_options.index(rounded_str) if rounded_str in time_options else 10
-            communicate_time = st.selectbox(
-                "沟通时间",
-                options=time_options,
-                index=time_index
-            )
         with col2:
             channel = st.selectbox("招聘渠道", CHANNELS)
 
@@ -1002,7 +991,7 @@ def render_add_candidate():
         if intern_name != st.session_state.get("last_intern_name", ""):
             st.session_state["last_intern_name"] = intern_name
 
-        communicate_datetime = f"{communicate_date} {communicate_time}"
+        communicate_datetime = str(communicate_date)
 
     # 开始处理按钮
     col_btn, _ = st.columns([1, 3])
@@ -1814,11 +1803,11 @@ def render_settings():
                 if new_user and new_user.strip():
                     new_user = new_user.strip()
                     if new_user != current_user:
-                        st.session_state["user_id"] = new_user
-                        # 清除缓存，让新用户的配置和数据生效
+                        # 彻底清除所有会话状态，防止数据残留导致跨用户数据混淆
                         for key in list(st.session_state.keys()):
-                            if key.startswith("_") and key != "user_id":
+                            if key != "user_id":
                                 del st.session_state[key]
+                        st.session_state["user_id"] = new_user
                         st.success(f"已切换到用户：{new_user}")
                         st.rerun()
                 else:
