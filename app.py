@@ -884,7 +884,7 @@ def main():
         user_id = st.session_state.get("user_id", "")
         st.markdown(
             f"<p class='subtitle' style='text-align: right; margin-top: 0.8rem;'>"
-            f"销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v5</span>"
+            f"销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v6</span>"
             f"</p>"
             f"<p style='text-align: right; font-size: 0.75rem; color: #6B8A72; margin-top: 0.2rem;'>"
             f"当前用户：{user_id}"
@@ -1182,9 +1182,15 @@ def show_pending_results():
                     st.write(f"**渠道：** {candidate.get('channel') or '无'}")
 
                 desc = candidate.get("description", "")
-                if desc:
-                    st.markdown("**台账内容**")
-                    _render_readonly_box(desc, height=120)
+                st.markdown("**台账内容**")
+                desc_key = f"pending_desc_{candidate['id']}"
+                st.text_area(
+                    "台账内容编辑",
+                    value=desc,
+                    key=desc_key,
+                    height=120,
+                    label_visibility="collapsed"
+                )
 
                 scores = candidate.get("score_details", {})
                 if scores:
@@ -1208,20 +1214,31 @@ def show_pending_results():
                         )
 
             # 标记结果按钮
+            current_result = candidate.get("result")
             c1, c2, c3 = st.columns(3)
             with c1:
-                if st.button("推荐", key=f"rec_{candidate['id']}", width="stretch"):
+                rec_label = "✅ 推荐" if current_result == "推荐" else "推荐"
+                if st.button(rec_label, disabled=(current_result == "推荐"),
+                             key=f"rec_{candidate['id']}", width="stretch"):
+                    desc_key = f"pending_desc_{candidate['id']}"
+                    edited_desc = st.session_state.get(desc_key, candidate.get("description", ""))
                     modules["database"].update_candidate(
-                        candidate["id"], {"result": "推荐"}
+                        candidate["id"], {"result": "推荐", "description": edited_desc}
                     )
                     candidate["result"] = "推荐"
+                    st.toast("已标记为推荐", icon="✅")
                     st.rerun()
             with c2:
-                if st.button("淘汰", key=f"elim_{candidate['id']}", width="stretch"):
+                elim_label = "❌ 淘汰" if current_result == "淘汰" else "淘汰"
+                if st.button(elim_label, disabled=(current_result == "淘汰"),
+                             key=f"elim_{candidate['id']}", width="stretch"):
+                    desc_key = f"pending_desc_{candidate['id']}"
+                    edited_desc = st.session_state.get(desc_key, candidate.get("description", ""))
                     modules["database"].update_candidate(
-                        candidate["id"], {"result": "淘汰"}
+                        candidate["id"], {"result": "淘汰", "description": edited_desc}
                     )
                     candidate["result"] = "淘汰"
+                    st.toast("已标记为淘汰", icon="❌")
                     st.rerun()
             with c3:
                 if st.button("暂不标记", key=f"skip_{candidate['id']}", width="stretch"):
@@ -1339,7 +1356,7 @@ def _format_candidate_row(c: dict) -> str:
         _v(c.get("education")),
         _v(c.get("is_fresh_grad")),
         _v(c.get("channel")),
-        _v(c.get("description")),
+        _v(c.get("description")).replace("\n", " ").replace("\r", ""),
         _v(c.get("remarks"))
     ]
     return "\t".join(fields)
@@ -1424,7 +1441,14 @@ def show_candidate_detail(candidate_id: int):
         st.warning("候选人不存在")
         return
 
-    st.subheader(f"{candidate['name'] or '未知'}")
+    name_col, copy_col = st.columns([4, 1])
+    with name_col:
+        st.subheader(f"{candidate['name'] or '未知'}")
+    with copy_col:
+        _render_copy_button(
+            _format_candidate_row(candidate),
+            f"copy_btn_top_{candidate_id}"
+        )
 
     # ========== 编辑模式 ==========
     edit_key = f"_edit_mode_{candidate_id}"
@@ -1468,6 +1492,8 @@ def show_candidate_detail(candidate_id: int):
             edit_channel = st.text_input("招聘渠道", value=candidate.get("channel") or "", key=f"edit_channel_{candidate_id}")
             edit_intern = st.text_input("跟进实习生", value=candidate.get("intern_name") or "", key=f"edit_intern_{candidate_id}")
             edit_remarks = st.text_input("备注", value=candidate.get("remarks") or "", key=f"edit_remarks_{candidate_id}")
+            edit_comm_time = st.text_input("沟通时间", value=candidate.get("communicate_time") or "", key=f"edit_comm_time_{candidate_id}")
+            edit_description = st.text_area("推荐沟通情况", value=candidate.get("description") or "", key=f"edit_desc_{candidate_id}", height=120)
 
             # ===== 人工评分编辑 =====
             st.markdown("**编辑评分**")
@@ -1524,6 +1550,8 @@ def show_candidate_detail(candidate_id: int):
                         "is_fresh_grad": edit_fresh,
                         "intern_name": edit_intern,
                         "remarks": edit_remarks,
+                        "communicate_time": edit_comm_time,
+                        "description": edit_description,
                         "score_details": edited_scores,
                         "score_total": score_total,
                         "score_source": "manual",
@@ -1580,26 +1608,28 @@ def show_candidate_detail(candidate_id: int):
     st.markdown("**操作**")
     current_result = candidate.get("result")
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
-        if st.button("推荐", disabled=(current_result == "推荐"),
+        rec_label = "✅ 推荐" if current_result == "推荐" else "推荐"
+        if st.button(rec_label, disabled=(current_result == "推荐"),
                      key=f"hist_rec_{candidate_id}", width="stretch"):
             try:
                 modules["database"].update_candidate(
                     candidate_id, {"result": "推荐"}
                 )
-                st.success("已标记为推荐")
+                st.toast("已标记为推荐", icon="✅")
                 st.rerun()
             except Exception as e:
                 st.error(f"标记失败: {e}")
     with c2:
-        if st.button("淘汰", disabled=(current_result == "淘汰"),
+        elim_label = "❌ 淘汰" if current_result == "淘汰" else "淘汰"
+        if st.button(elim_label, disabled=(current_result == "淘汰"),
                      key=f"hist_elim_{candidate_id}", width="stretch"):
             try:
                 modules["database"].update_candidate(
                     candidate_id, {"result": "淘汰"}
                 )
-                st.success("已标记为淘汰")
+                st.toast("已标记为淘汰", icon="❌")
                 st.rerun()
             except Exception as e:
                 st.error(f"标记失败: {e}")
@@ -1608,11 +1638,6 @@ def show_candidate_detail(candidate_id: int):
             st.session_state[edit_key] = True
             st.rerun()
     with c4:
-        _render_copy_button(
-            _format_candidate_row(candidate),
-            f"copy_btn_{candidate_id}"
-        )
-    with c5:
         # 删除需要确认
         del_confirm_key = f"_del_confirm_{candidate_id}"
         if del_confirm_key not in st.session_state:
@@ -1684,7 +1709,7 @@ def render_export():
         st.markdown("#### 导出设置")
         col1, col2 = st.columns(2)
         with col1:
-            include_scores = st.checkbox("包含评分详情", value=True)
+            include_scores = st.checkbox("包含评分详情", value=False)
         with col2:
             include_description = st.checkbox("包含沟通情况", value=True)
 

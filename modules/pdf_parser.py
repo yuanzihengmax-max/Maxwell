@@ -78,7 +78,7 @@ class PDFParser:
         """
         text = self.extract_text(pdf_source)
 
-        return {
+        result = {
             "name": self._extract_name(text),
             "phone": self._extract_phone(text),
             "email": self._extract_email(text),
@@ -91,31 +91,94 @@ class PDFParser:
             "raw_text": text  # 保留原文，后面AI分析时要用
         }
 
+        # 按需 AI fallback：手机号/邮箱/出生年份任一为空时调用AI补充
+        if ai_analyzer and (not result.get("phone") or not result.get("email") or not result.get("birth_year")):
+            try:
+                missing = ai_analyzer.extract_missing_info(text)
+                if missing and isinstance(missing, dict):
+                    if not result.get("phone") and missing.get("phone"):
+                        result["phone"] = missing["phone"]
+                    if not result.get("email") and missing.get("email"):
+                        result["email"] = missing["email"]
+                    if not result.get("birth_year") and missing.get("birth_year"):
+                        try:
+                            by = missing["birth_year"]
+                            if isinstance(by, int) and 1960 <= by <= 2015:
+                                result["birth_year"] = by
+                            elif isinstance(by, str) and by.isdigit():
+                                by_int = int(by)
+                                if 1960 <= by_int <= 2015:
+                                    result["birth_year"] = by_int
+                        except (ValueError, TypeError):
+                            pass
+            except Exception:
+                # AI fallback 失败时不阻断主流程
+                pass
+
+        return result
+
     # ========== 信息提取方法 ==========
 
     def _extract_phone(self, text: str) -> Optional[str]:
         """提取手机号（中国大陆）
 
-        规则：1 开头，第二位是 3-9 之间的数字，后面跟9位数字
-        例如：13800138000
+        规则：
+        1. 优先匹配带前缀格式（手机/电话/Tel/Mobile）
+        2. 支持空格、横杠、括号等分隔符
+        3. 清洗后验证 1 开头 + 10 位数字
         """
-        pattern = r'1[3-9]\d{9}'
-        match = re.search(pattern, text)
-        return match.group() if match else None
+        # 策略1：匹配带前缀的号码（允许空格、横杠、括号）
+        prefix_pattern = r'(?:手机|电话|Tel|Mobile|联系方式)[\s:：]*([0-9\s\-()]{11,20})'
+        match = re.search(prefix_pattern, text, re.IGNORECASE)
+        if match:
+            cleaned = re.sub(r'[\s\-\()]', '', match.group(1))
+            if re.fullmatch(r'1[3-9]\d{9}', cleaned):
+                return cleaned
+
+        # 策略2：直接匹配 11 位手机号（允许中间有空格/横杠）
+        broad_pattern = r'1[3-9]\d[\s\-]?\d{4}[\s\-]?\d{4}'
+        match = re.search(broad_pattern, text)
+        if match:
+            cleaned = re.sub(r'[\s\-]', '', match.group())
+            if re.fullmatch(r'1[3-9]\d{9}', cleaned):
+                return cleaned
+
+        # 策略3：纯数字直接匹配
+        match = re.search(r'1[3-9]\d{9}', text)
+        if match:
+            return match.group()
+
+        return None
 
     def _extract_email(self, text: str) -> Optional[str]:
         """提取邮箱地址
 
-        规则：xxx@xxx.xxx 的格式
+        规则：
+        1. 支持标准格式 xxx@xxx.xxx
+        2. 支持 @ 前后有空格/换行的情况
+        3. 增强域名后缀匹配
         """
-        pattern = r'[\w.-]+@[\w.-]+\.\w+'
+        # 策略1：允许 @ 前后有空格或换行
+        pattern = r'[\w.-]+\s*@\s*[\w.-]+\.\w+'
         match = re.search(pattern, text)
-        return match.group() if match else None
+        if match:
+            return re.sub(r'\s+', '', match.group())
+
+        # 策略2：处理换行断开的邮箱（把文本中的换行替换为空格后重试）
+        normalized = text.replace('\n', ' ').replace('\r', ' ')
+        match = re.search(r'[\w.-]+@[\w.-]+\.\w+', normalized)
+        if match:
+            return match.group()
+
+        return None
 
     def _extract_birth_year(self, text: str) -> Optional[int]:
         """提取出生年份
 
-        支持格式：1998年、1998-、1998.、1998/、出生年月：1998、2001.09 等
+        支持格式：
+        - 1998年、1998-、1998.、1998/、出生年月：1998、2001.09 等
+        - 18位身份证号
+        - 出生年月日完整日期格式
         年份范围限制在 1960-2015 之间（覆盖更宽的年龄段）
         """
         patterns = [
@@ -126,6 +189,8 @@ class PDFParser:
             r'(19\d{2}|20\d{2})[-./]',
             # 纯数字年份（前后有换行或空格，避免误匹配其他4位数字）
             r'(?:^|\s|\n)(19[6-9]\d|20[0-1]\d)(?:\s|\n|$)',
+            # 出生年月日完整格式，只取年份
+            r'(?:出生)?[日期年月\s]*[\s:：]*(19\d{2}|20\d{2})[年./\s]*\d{1,2}[月./\s]*\d{1,2}',
         ]
         for pattern in patterns:
             match = re.search(pattern, text)
@@ -133,6 +198,13 @@ class PDFParser:
                 year = int(match.group(1))
                 if 1960 <= year <= 2015:
                     return year
+
+        # 从18位身份证号提取出生年份
+        id_match = re.search(r'(\d{6})(19\d{2}|20\d{2})(\d{4})(?:\d|[Xx])', text)
+        if id_match:
+            year = int(id_match.group(2))
+            if 1960 <= year <= 2015:
+                return year
 
         # Fallback: 通过教育阶段推算
         inferred = self._infer_birth_year_from_education(text)
