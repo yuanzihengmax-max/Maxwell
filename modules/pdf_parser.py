@@ -91,11 +91,13 @@ class PDFParser:
             "raw_text": text  # 保留原文，后面AI分析时要用
         }
 
-        # 按需 AI fallback：手机号/邮箱/出生年份任一为空时调用AI补充
-        if ai_analyzer and (not result.get("phone") or not result.get("email") or not result.get("birth_year")):
+        # 按需 AI fallback：姓名/手机号/邮箱/出生年份任一为空时调用AI补充
+        if ai_analyzer and (not result.get("name") or not result.get("phone") or not result.get("email") or not result.get("birth_year")):
             try:
                 missing = ai_analyzer.extract_missing_info(text)
                 if missing and isinstance(missing, dict):
+                    if not result.get("name") and missing.get("name"):
+                        result["name"] = missing["name"]
                     if not result.get("phone") and missing.get("phone"):
                         result["phone"] = missing["phone"]
                     if not result.get("email") and missing.get("email"):
@@ -538,7 +540,7 @@ class PDFParser:
         }
 
         # 策略1：优先从"姓名"标签行提取（支持同一行或跨行）
-        for i, line in enumerate(lines[:25]):
+        for i, line in enumerate(lines[:50]):
             line_stripped = line.strip()
             # 1a: 标签和名字在同一行
             m = re.search(r'(?:姓名|Name)[\s:：]+([一-龥a-zA-Z·\s]{2,10})', line_stripped, re.IGNORECASE)
@@ -558,9 +560,9 @@ class PDFParser:
                         if next_line not in excluded:
                             return next_line
 
-        # 策略2：前25行找纯中文2-4字，带上下文判断
+        # 策略2：前50行找纯中文2-4字，带上下文判断
         candidates = []
-        for i, line in enumerate(lines[:25]):
+        for i, line in enumerate(lines[:50]):
             line = line.strip()
 
             # 长度检查：2-4个字符

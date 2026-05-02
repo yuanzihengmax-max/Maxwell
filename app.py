@@ -1061,7 +1061,15 @@ def _extract_name_from_filename(filename: str) -> str:
         if len(cn_chars) >= 2 and len(cn_chars) <= 6:
             return part
 
-    return name.strip()
+    # 回退：从整个文件名中提取连续的中文字符片段
+    # 不要直接返回 name.strip()，可能包含"女士""简历"等词
+    cn_sequences = re.findall(r'[一-龥]{2,4}', name)
+    for seq in cn_sequences:
+        if not any(bad in seq for bad in excluded_contains):
+            return seq
+
+    # 彻底失败则返回空（让AI兜底）
+    return ""
 
 
 def _render_readonly_box(text: str, height: int = 120):
