@@ -16,6 +16,7 @@ AI分析模块 —— 应用的"大脑"
 """
 
 import json
+from datetime import datetime
 from typing import Dict
 
 from config import get_ai_config, DESCRIPTION_DIMENSIONS, calculate_cost

@@ -892,7 +892,7 @@ def main():
         with right_area:
             st.markdown(
                 "<p style='text-align: right; margin-top: 0.5rem;'>"
-                "销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v6.6</span>"
+                "销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v6.7</span>"
                 "</p>",
                 unsafe_allow_html=True
             )
@@ -1485,21 +1485,7 @@ def show_candidate_detail(candidate_id: int):
             if raw_text and modules.get("ai_analyzer"):
                 try:
                     with st.spinner("AI识别中..."):
-                        try:
-                            ai_result = modules["ai_analyzer"].extract_missing_info(raw_text)
-                        except Exception:
-                            # 本地测试：API未配置时使用mock数据
-                            ai_result = {
-                                "name": "于丰硕",
-                                "phone": "13589674707",
-                                "email": "13589674707@163.com",
-                                "gender": "男",
-                                "birth_year": 2004,
-                                "school": "安徽工业大学",
-                                "major": "国际经济与贸易",
-                                "education": "本科（全日制）",
-                                "is_fresh_grad": "是"
-                            }
+                        ai_result = modules["ai_analyzer"].extract_missing_info(raw_text)
                     if ai_result and isinstance(ai_result, dict):
                         st.session_state[f"_ai_fallback_{candidate_id}"] = ai_result
                         # 弹窗展示AI识别结果
