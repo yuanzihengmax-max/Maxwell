@@ -892,7 +892,7 @@ def main():
         with right_area:
             st.markdown(
                 "<p style='text-align: right; margin-top: 0.5rem;'>"
-                "销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v6.4</span>"
+                "销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v6.5</span>"
                 "</p>",
                 unsafe_allow_html=True
             )
@@ -1488,7 +1488,22 @@ def show_candidate_detail(candidate_id: int):
                         ai_result = modules["ai_analyzer"].extract_missing_info(raw_text)
                     if ai_result and isinstance(ai_result, dict):
                         st.session_state[f"_ai_fallback_{candidate_id}"] = ai_result
-                        st.toast("AI识别完成，已预填入编辑模式", icon="🤖")
+                        # 弹窗展示AI识别结果
+                        field_labels = {
+                            "name": "姓名", "phone": "手机", "email": "邮箱",
+                            "gender": "性别", "birth_year": "出生年份",
+                            "school": "学校", "major": "专业",
+                            "education": "学历", "is_fresh_grad": "是否应届"
+                        }
+                        found = []
+                        for field, label in field_labels.items():
+                            val = ai_result.get(field)
+                            if val and str(val).lower() not in ("null", "none", ""):
+                                found.append(f"{label}: {val}")
+                        if found:
+                            st.toast("✅ AI识别完成\\n" + "\\n".join(found), icon="🤖")
+                        else:
+                            st.toast("⚠️ AI识别完成，但未提取到新信息", icon="🤖")
                     else:
                         st.toast("AI未返回有效结果", icon="⚠️")
                 except Exception as e:
