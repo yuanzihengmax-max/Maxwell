@@ -887,15 +887,17 @@ def main():
         )
     with header_right:
         user_id = st.session_state.get("user_id", "")
-        st.markdown(
-            f"<p class='subtitle' style='text-align: right; margin-top: 0.8rem;'>"
-            f"销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v6</span>"
-            f"</p>"
-            f"<p style='text-align: right; font-size: 0.75rem; color: #6B8A72; margin-top: 0.2rem;'>"
-            f"当前用户：{user_id}"
-            f"</p>",
-            unsafe_allow_html=True
-        )
+        # 使用原生 Streamlit 组件展示，避免用户输入直接嵌入 HTML 导致 XSS
+        _, right_area = st.columns([1, 2])
+        with right_area:
+            st.markdown(
+                "<p style='text-align: right; margin-top: 0.5rem;'>"
+                "销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v6</span>"
+                "</p>",
+                unsafe_allow_html=True
+            )
+            display_user = user_id[:20] + "..." if len(user_id) > 20 else user_id
+            st.caption(f"当前用户：{display_user}")
 
     # 检查AI配置
     missing_config = validate_ai_config()
@@ -1001,8 +1003,18 @@ def render_add_candidate():
                 try:
                     process_candidates(uploaded_files, phone_transcripts,
                                        communicate_datetime, channel, intern_name)
+                except RuntimeError as e:
+                    err_msg = str(e)
+                    if "API密钥错误" in err_msg or "密钥" in err_msg:
+                        st.error("🔑 API 密钥无效，请前往「系统配置」页面检查。")
+                    elif "AI服务出错" in err_msg:
+                        st.error("🤖 AI 服务暂时不可用，请稍后再试。")
+                    elif "AI返回" in err_msg:
+                        st.error(f"📝 AI 返回异常：{err_msg}")
+                    else:
+                        st.error(f"❌ 处理失败：{err_msg}")
                 except Exception as e:
-                    st.error(f"处理失败: {e}")
+                    st.error(f"❌ 处理失败：{e}")
 
 
 def _extract_name_from_filename(filename: str) -> str:
@@ -1014,21 +1026,41 @@ def _extract_name_from_filename(filename: str) -> str:
     name = re.sub(r'[【】]', '', name)
     # 按 _ 或空格分割
     parts = [p.strip() for p in re.split(r'[_\s]', name) if p.strip()]
-    # 过滤掉常见非姓名部分，找第一个像人名的
-    excluded = {'副本', '简历', '应聘', '求职'}
-    for part in parts:
-        if part in excluded:
-            continue
-        # 跳过类似"24年毕业"
+
+    # 排除词：精确匹配
+    excluded_exact = {'副本', '简历', '应聘', '求职'}
+    # 排除词：包含即过滤（称谓、通用词）
+    excluded_contains = {'先生', '小姐', '女士'}
+
+    def _is_valid_name_part(part: str) -> bool:
+        """检查一个部分是否像人名"""
+        if part in excluded_exact:
+            return False
+        if any(bad in part for bad in excluded_contains):
+            return False
         if re.match(r'\d+年毕业', part):
-            continue
-        # 包含中文且长度2-4，大概率是姓名
-        if re.search(r'[一-龥]', part) and 2 <= len(part) <= 4:
-            return part
-    # 兜底：返回第一个有效部分
+            return False
+        # 过滤掉含"简历/求职/应聘"的词
+        if any(bad in part for bad in ('简历', '求职', '应聘')):
+            return False
+        return True
+
+    # 第一轮：找长度2-4个中文字符的部分
     for part in parts:
-        if part not in excluded and not re.match(r'\d+年毕业', part):
+        if not _is_valid_name_part(part):
+            continue
+        cn_chars = re.findall(r'[一-龥]', part)
+        if 2 <= len(cn_chars) <= 4:
             return part
+
+    # 第二轮：更宽松，但限制长度（避免返回超长串）
+    for part in parts:
+        if not _is_valid_name_part(part):
+            continue
+        cn_chars = re.findall(r'[一-龥]', part)
+        if len(cn_chars) >= 2 and len(cn_chars) <= 6:
+            return part
+
     return name.strip()
 
 
@@ -1491,20 +1523,21 @@ def show_candidate_detail(candidate_id: int):
             edited_scores = {}
             score_total = 0.0
 
-            for dim_cfg in modules["scoring_dimensions"]:
-                dim_name = dim_cfg["dimension_name"]
-                weight = dim_cfg["weight"]
-                current_score = current_scores.get(dim_name, 0) or 0
-                edited_score = st.slider(
-                    dim_name,
-                    min_value=1.0,
-                    max_value=5.0,
-                    value=float(current_score) if current_score else 3.0,
-                    step=0.5,
-                    key=f"edit_score_{candidate_id}_{dim_name}",
-                )
-                edited_scores[dim_name] = edited_score
-                score_total += edited_score * weight
+            with st.container(height=400):
+                for dim_cfg in modules["scoring_dimensions"]:
+                    dim_name = dim_cfg["dimension_name"]
+                    weight = dim_cfg["weight"]
+                    current_score = current_scores.get(dim_name, 0) or 0
+                    edited_score = st.slider(
+                        dim_name,
+                        min_value=1.0,
+                        max_value=5.0,
+                        value=float(current_score) if current_score else 3.0,
+                        step=0.5,
+                        key=f"edit_score_{candidate_id}_{dim_name}",
+                    )
+                    edited_scores[dim_name] = edited_score
+                    score_total += edited_score * weight
 
             score_total = round(score_total, 2)
             st.markdown(f"**加权总分：{score_total:.2f} / 5.0**")
@@ -2481,6 +2514,7 @@ def render_data_management():
                 tmp_path = tmp.name
 
             is_valid = False
+            missing_cols = []
             try:
                 conn = sqlite3.connect(tmp_path)
                 cursor = conn.cursor()
@@ -2488,12 +2522,32 @@ def render_data_management():
                     "SELECT name FROM sqlite_master WHERE type='table' AND name='candidates'"
                 )
                 is_valid = cursor.fetchone() is not None
+
+                if is_valid:
+                    # 校验必需列是否存在
+                    cursor.execute("PRAGMA table_info(candidates)")
+                    columns = {row[1] for row in cursor.fetchall()}
+                    required = {
+                        "name", "phone", "email", "gender", "birth_year",
+                        "school", "major", "education", "is_fresh_grad",
+                        "channel", "communicate_time", "description",
+                        "score_total", "score_details", "result"
+                    }
+                    missing_cols = list(required - columns)
+                    if missing_cols:
+                        is_valid = False
+
                 conn.close()
             except Exception:
                 is_valid = False
 
             if not is_valid:
-                st.error("上传的文件不是有效的招聘助手数据库（缺少 candidates 表）。")
+                if missing_cols:
+                    st.error(
+                        f"数据库文件版本不兼容，缺少必需字段：{', '.join(missing_cols)}"
+                    )
+                else:
+                    st.error("上传的文件不是有效的招聘助手数据库（缺少 candidates 表）。")
                 os.remove(tmp_path)
                 return
 

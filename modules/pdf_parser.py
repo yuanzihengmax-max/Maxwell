@@ -534,11 +534,13 @@ class PDFParser:
             '记者', '北京', '上海', '广州', '深圳', '杭州', '成都', '南京',
             '武汉', '西安', '重庆', '天津', '苏州', '长沙', '郑州', '东莞',
             '青岛', '宁波', '无锡', '佛山', '合肥', '大连', '厦门', '济南',
+            '先生', '小姐', '女士',
         }
 
-        # 策略1：优先从"姓名"标签行提取
-        for line in lines[:20]:
+        # 策略1：优先从"姓名"标签行提取（支持同一行或跨行）
+        for i, line in enumerate(lines[:25]):
             line_stripped = line.strip()
+            # 1a: 标签和名字在同一行
             m = re.search(r'(?:姓名|Name)[\s:：]+([一-龥a-zA-Z·\s]{2,10})', line_stripped, re.IGNORECASE)
             if m:
                 name = m.group(1).strip()
@@ -548,10 +550,17 @@ class PDFParser:
                     candidate = ''.join(cn_only)
                     if 2 <= len(candidate) <= 4:
                         return candidate
+            # 1b: 标签单独一行，名字在下一行
+            if re.match(r'^(?:姓名|Name)[\s:：]*$', line_stripped, re.IGNORECASE):
+                if i + 1 < len(lines):
+                    next_line = lines[i + 1].strip()
+                    if re.match(r'^[一-龥·]+$', next_line) and 2 <= len(next_line) <= 4:
+                        if next_line not in excluded:
+                            return next_line
 
-        # 策略2：前15行找纯中文2-4字，带上下文判断
+        # 策略2：前25行找纯中文2-4字，带上下文判断
         candidates = []
-        for i, line in enumerate(lines[:15]):
+        for i, line in enumerate(lines[:25]):
             line = line.strip()
 
             # 长度检查：2-4个字符
@@ -1522,45 +1531,87 @@ class PDFParser:
 
         return None
 
+    def _is_zhuanshengben(self, text: str) -> bool:
+        """判断本科段是否为专升本（时长 < 3.5 年）
+
+        正常本科 4 年，专升本通常 2 年。
+        扫描包含"本科"、"学士"关键词的行，提取起止年份计算时长。
+        """
+        lines = text.split('\n')
+        for line in lines:
+            # 只检查包含本科/学士相关关键词的行
+            if not any(k in line for k in ('本科', '学士')):
+                continue
+            # 排除同时含硕士/博士的行（避免误判研究生段）
+            if '硕士' in line or '博士' in line or '研究生' in line:
+                continue
+
+            # 匹配起止年份：2020.09-2022.06 或 2020.09~2022.06
+            m = re.search(r'(\d{4})[\.\-/年]\d{1,2}.*?[-~至—]\s*(\d{4})', line)
+            if m:
+                start_year = int(m.group(1))
+                end_year = int(m.group(2))
+                duration = end_year - start_year
+                if 0 < duration < 3.5:
+                    return True
+
+            # 简化格式：2020-2022（无月份）
+            m = re.search(r'(\d{4})\s*[-~至—]\s*(\d{4})', line)
+            if m:
+                start_year = int(m.group(1))
+                end_year = int(m.group(2))
+                duration = end_year - start_year
+                if 0 < duration < 3.5:
+                    return True
+
+        return False
+
     def _extract_education(self, text: str) -> Optional[str]:
         """提取学历
 
         规则：
-        1. 按关键词长度降序匹配，避免短词误匹配长词（如"本科"误匹配"专升本"）
-        2. 单独处理"专升本"、"大学专科"、"大学本科"等精确表述
+        1. 按学历层级优先级扫描，取最高学历
+        2. 本科段若时长 < 3.5 年，判定为专升本
+        3. 单独处理"专升本"、"大学专科"、"大学本科"等精确表述
         """
-        edu_map = {
-            "博士研究生": "博士",
-            "硕士研究生": "硕士",
-            "在职研究生": "硕士",
-            "工程硕士": "硕士",
-            "EMBA": "硕士",
-            "MBA": "硕士",
-            "专升本": "专科（全日制）",
-            "大学专科": "专科（全日制）",
-            "高职高专": "专科（全日制）",
-            "大专": "专科（全日制）",
-            "高职": "专科（全日制）",
-            "高专": "专科（全日制）",
-            "大学": "本科（全日制）",  # 宽泛回退，前面有更精确的会先匹配
-            "大学本科": "本科（全日制）",
-            "本科": "本科（全日制）",
-            "学士": "本科（全日制）",
-            "硕士": "硕士",
-            "研究生": "硕士",
-            "博士": "博士",
-            "高中": "高中",
-            "中专": "中专",
-            "职高": "中专",
-            "技校": "中专",
-            "初中": "初中",
-        }
-        # 按关键词长度降序排列，优先匹配更精确的词
-        sorted_items = sorted(edu_map.items(), key=lambda x: len(x[0]), reverse=True)
-        for key, value in sorted_items:
-            if key in text:
-                return value
-        return None
+        # 优先级分组：数值越大优先级越高
+        priority_groups = [
+            # 优先级 5：博士
+            (5, {"博士研究生": "博士", "博士": "博士"}),
+            # 优先级 4：硕士
+            (4, {"硕士研究生": "硕士", "在职研究生": "硕士", "工程硕士": "硕士",
+                 "EMBA": "硕士", "MBA": "硕士", "硕士": "硕士", "研究生": "硕士"}),
+            # 优先级 3：本科（含专升本）
+            (3, {"专升本": "专升本（全日制）", "大学本科": "本科（全日制）",
+                 "本科": "本科（全日制）", "学士": "本科（全日制）"}),
+            # 优先级 2：专科
+            (2, {"大学专科": "专科（全日制）", "高职高专": "专科（全日制）",
+                 "大专": "专科（全日制）", "高职": "专科（全日制）", "高专": "专科（全日制）"}),
+            # 优先级 1：高中/中专
+            (1, {"高中": "高中", "中专": "中专", "职高": "中专", "技校": "中专"}),
+            # 优先级 0：初中
+            (0, {"初中": "初中"}),
+        ]
+
+        highest_priority = -1
+        result = None
+
+        for priority, keywords in priority_groups:
+            if priority < highest_priority:
+                continue
+            for key, value in keywords.items():
+                if key in text:
+                    highest_priority = priority
+                    # 本科层级（非明确"专升本"关键词）需要检查时长
+                    if priority == 3 and key != "专升本":
+                        if self._is_zhuanshengben(text):
+                            result = "专升本（全日制）"
+                        else:
+                            result = value
+                    else:
+                        result = value
+
+        return result
 
     def _check_fresh_grad(self, text: str) -> str:
         """判断是否为应届生

@@ -70,8 +70,10 @@ class Database:
         - with 块开始时开门
         - with 块结束时自动关门，不用担心忘记关
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row  # 让查询结果可以用列名来取值
+        # WAL 模式提升读写并发能力，减少 database is locked 概率
+        conn.execute("PRAGMA journal_mode=WAL")
         try:
             yield conn  # 把连接交给调用方使用
         finally:
