@@ -23,7 +23,7 @@ import streamlit as st
 
 from config import CHANNELS, SCORING_DIMENSIONS, AI_CONFIG, validate_ai_config, get_ai_config, save_user_config, clear_user_config, load_scoring_dimensions, validate_scoring_weights, load_pricing_config, save_pricing_config, calculate_cost
 from modules.pdf_parser import PDFParser
-from modules.ai_analyzer import AIAnalyzer
+from modules.ai_analyzer import AIAnalyzer, DEFAULT_RESUME_EXTRACT_PROMPT
 from modules.database import Database
 from modules.excel_exporter import ExcelExporter
 
@@ -892,7 +892,7 @@ def main():
         with right_area:
             st.markdown(
                 "<p style='text-align: right; margin-top: 0.5rem;'>"
-                "销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v6.8</span>"
+                "销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v6.9</span>"
                 "</p>",
                 unsafe_allow_html=True
             )
@@ -1485,7 +1485,8 @@ def show_candidate_detail(candidate_id: int):
             if raw_text and modules.get("ai_analyzer"):
                 try:
                     with st.spinner("AI识别中..."):
-                        ai_result = modules["ai_analyzer"].extract_missing_info(raw_text)
+                        custom_prompt = get_ai_config().get("resume_extract_prompt")
+                        ai_result = modules["ai_analyzer"].extract_missing_info(raw_text, custom_prompt=custom_prompt)
                     if ai_result and isinstance(ai_result, dict):
                         st.session_state[f"_ai_fallback_{candidate_id}"] = ai_result
                         # 弹窗展示AI识别结果
@@ -2023,6 +2024,23 @@ def render_settings():
         if base_url != st.session_state.get("cfg_base_url_val", ""):
             st.session_state["cfg_base_url_val"] = base_url
 
+    # 简历信息提取 Prompt 编辑区
+    with st.container(border=True):
+        st.markdown("#### 简历信息提取 Prompt")
+        st.caption("可自定义 AI 识别简历时使用的提示词。支持 {current_year} 和 {resume_text} 占位符，运行时会被自动替换。")
+        # 从当前配置或 session_state 读取已保存的自定义 prompt
+        cfg_prompt_key = "cfg_resume_prompt"
+        if cfg_prompt_key not in st.session_state:
+            saved_prompt = current.get("resume_extract_prompt", "")
+            st.session_state[cfg_prompt_key] = saved_prompt if saved_prompt else DEFAULT_RESUME_EXTRACT_PROMPT
+        custom_prompt = st.text_area(
+            "Prompt 内容",
+            value=st.session_state[cfg_prompt_key],
+            height=400,
+            key=cfg_prompt_key,
+            help="修改后点击保存配置即可生效。如留空则使用系统默认 Prompt。"
+        )
+
     # 保存按钮
     col_save, col_clear = st.columns([1, 1])
     with col_save:
@@ -2034,6 +2052,7 @@ def render_settings():
                 "api_key": api_key,
                 "model": model,
                 "base_url": final_base_url,
+                "resume_extract_prompt": custom_prompt.strip(),
             }
             st.session_state["ai_config"] = cfg
             # 持久化到文件，刷新浏览器后配置不丢失

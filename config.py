@@ -93,7 +93,7 @@ def load_user_config() -> dict:
             # 只保留有效的配置项
             return {
                 k: v for k, v in data.items()
-                if k in ("provider", "model", "api_key", "base_url")
+                if k in ("provider", "model", "api_key", "base_url", "resume_extract_prompt")
             }
     except (json.JSONDecodeError, IOError):
         return {}
@@ -104,7 +104,7 @@ def save_user_config(config: dict) -> None:
     path = _get_user_config_path()
     data = {
         k: v for k, v in config.items()
-        if k in ("provider", "model", "api_key", "base_url")
+        if k in ("provider", "model", "api_key", "base_url", "resume_extract_prompt")
     }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
