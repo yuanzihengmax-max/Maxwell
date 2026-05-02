@@ -892,7 +892,7 @@ def main():
         with right_area:
             st.markdown(
                 "<p style='text-align: right; margin-top: 0.5rem;'>"
-                "销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v6.2</span>"
+                "销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v6.3</span>"
                 "</p>",
                 unsafe_allow_html=True
             )
@@ -1146,7 +1146,8 @@ def process_candidates(files, transcripts, communicate_time, channel, intern_nam
                 "result": None,
                 "phone_transcript": transcript,
                 "intern_name": intern_name,
-                "remarks": _format_score_remarks(scores, total_score)
+                "remarks": _format_score_remarks(scores, total_score),
+                "resume_raw_text": resume_data.get("raw_text", ""),
             }
 
             # 5. 存入数据库
