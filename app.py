@@ -892,7 +892,7 @@ def main():
         with right_area:
             st.markdown(
                 "<p style='text-align: right; margin-top: 0.5rem;'>"
-                "销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v6.7</span>"
+                "销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v6.8</span>"
                 "</p>",
                 unsafe_allow_html=True
             )
@@ -1587,17 +1587,18 @@ def show_candidate_detail(candidate_id: int):
             e_col1, e_col2 = st.columns(2)
             with e_col1:
                 edit_name = st.text_input("姓名", value=candidate.get("name") or "", key=f"edit_name_{candidate_id}")
-                edit_phone = st.text_input("手机", value=candidate.get("phone") or "", key=f"edit_phone_{candidate_id}")
+                edit_phone = st.text_input("手机号", value=candidate.get("phone") or "", key=f"edit_phone_{candidate_id}")
+                edit_email = st.text_input("邮箱", value=candidate.get("email") or "", key=f"edit_email_{candidate_id}")
                 edit_school = st.text_input("学校", value=candidate.get("school") or "", key=f"edit_school_{candidate_id}")
                 edit_major = st.text_input("专业", value=candidate.get("major") or "", key=f"edit_major_{candidate_id}")
             with e_col2:
                 edit_edu = st.text_input("学历", value=candidate.get("education") or "", key=f"edit_edu_{candidate_id}")
                 edit_gender = st.text_input("性别", value=candidate.get("gender") or "", key=f"edit_gender_{candidate_id}")
-                edit_birth = st.text_input("出生年份", value=str(candidate.get("birth_year") or ""), key=f"edit_birth_{candidate_id}")
-                edit_fresh = st.text_input("是否应届", value=candidate.get("is_fresh_grad") or "", key=f"edit_fresh_{candidate_id}")
+                edit_birth = st.text_input("出生年", value=str(candidate.get("birth_year") or ""), key=f"edit_birth_{candidate_id}")
+                edit_fresh = st.text_input("是否为应届生（2026届）", value=candidate.get("is_fresh_grad") or "", key=f"edit_fresh_{candidate_id}")
 
             edit_channel = st.text_input("招聘渠道", value=candidate.get("channel") or "", key=f"edit_channel_{candidate_id}")
-            edit_intern = st.text_input("跟进实习生", value=candidate.get("intern_name") or "", key=f"edit_intern_{candidate_id}")
+            edit_intern = st.text_input("实习生", value=candidate.get("intern_name") or "", key=f"edit_intern_{candidate_id}")
             edit_remarks = st.text_input("备注", value=candidate.get("remarks") or "", key=f"edit_remarks_{candidate_id}")
             edit_comm_time = st.text_input("沟通时间", value=candidate.get("communicate_time") or "", key=f"edit_comm_time_{candidate_id}")
             edit_description = st.text_area("推荐沟通情况", value=candidate.get("description") or "", key=f"edit_desc_{candidate_id}", height=120)
@@ -1650,6 +1651,7 @@ def show_candidate_detail(candidate_id: int):
                     update_data = {
                         "name": edit_name,
                         "phone": edit_phone,
+                        "email": edit_email,
                         "school": edit_school,
                         "major": edit_major,
                         "education": edit_edu,
@@ -1683,6 +1685,7 @@ def show_candidate_detail(candidate_id: int):
                     for _key in [
                         f"edit_name_{candidate_id}",
                         f"edit_phone_{candidate_id}",
+                        f"edit_email_{candidate_id}",
                         f"edit_school_{candidate_id}",
                         f"edit_major_{candidate_id}",
                         f"edit_edu_{candidate_id}",
