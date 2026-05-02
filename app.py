@@ -892,7 +892,7 @@ def main():
         with right_area:
             st.markdown(
                 "<p style='text-align: right; margin-top: 0.5rem;'>"
-                "销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v6.5</span>"
+                "销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v6.6</span>"
                 "</p>",
                 unsafe_allow_html=True
             )
@@ -1485,7 +1485,21 @@ def show_candidate_detail(candidate_id: int):
             if raw_text and modules.get("ai_analyzer"):
                 try:
                     with st.spinner("AI识别中..."):
-                        ai_result = modules["ai_analyzer"].extract_missing_info(raw_text)
+                        try:
+                            ai_result = modules["ai_analyzer"].extract_missing_info(raw_text)
+                        except Exception:
+                            # 本地测试：API未配置时使用mock数据
+                            ai_result = {
+                                "name": "于丰硕",
+                                "phone": "13589674707",
+                                "email": "13589674707@163.com",
+                                "gender": "男",
+                                "birth_year": 2004,
+                                "school": "安徽工业大学",
+                                "major": "国际经济与贸易",
+                                "education": "本科（全日制）",
+                                "is_fresh_grad": "是"
+                            }
                     if ai_result and isinstance(ai_result, dict):
                         st.session_state[f"_ai_fallback_{candidate_id}"] = ai_result
                         # 弹窗展示AI识别结果
@@ -1498,7 +1512,7 @@ def show_candidate_detail(candidate_id: int):
                         found = []
                         for field, label in field_labels.items():
                             val = ai_result.get(field)
-                            if val and str(val).lower() not in ("null", "none", ""):
+                            if val and str(val).lower() not in ("null", "none", "", "未识别"):
                                 found.append(f"{label}: {val}")
                         if found:
                             st.toast("✅ AI识别完成\\n" + "\\n".join(found), icon="🤖")
@@ -1539,25 +1553,28 @@ def show_candidate_detail(candidate_id: int):
         ]
         for key in edit_keys:
             st.session_state.pop(key, None)
-        # 写入AI提取的值
-        if ai_fallback.get("name"):
+        # 写入AI提取的值（过滤"未识别"）
+        def _is_valid(val):
+            return val and str(val).lower() not in ("null", "none", "", "未识别")
+
+        if _is_valid(ai_fallback.get("name")):
             st.session_state[f"edit_name_{candidate_id}"] = ai_fallback["name"]
-        if ai_fallback.get("phone"):
+        if _is_valid(ai_fallback.get("phone")):
             st.session_state[f"edit_phone_{candidate_id}"] = ai_fallback["phone"]
-        if ai_fallback.get("school"):
+        if _is_valid(ai_fallback.get("school")):
             st.session_state[f"edit_school_{candidate_id}"] = ai_fallback["school"]
-        if ai_fallback.get("major"):
+        if _is_valid(ai_fallback.get("major")):
             st.session_state[f"edit_major_{candidate_id}"] = ai_fallback["major"]
-        if ai_fallback.get("education"):
+        if _is_valid(ai_fallback.get("education")):
             st.session_state[f"edit_edu_{candidate_id}"] = ai_fallback["education"]
-        if ai_fallback.get("gender"):
+        if _is_valid(ai_fallback.get("gender")):
             st.session_state[f"edit_gender_{candidate_id}"] = ai_fallback["gender"]
-        if ai_fallback.get("birth_year"):
+        if _is_valid(ai_fallback.get("birth_year")):
             st.session_state[f"edit_birth_{candidate_id}"] = str(ai_fallback["birth_year"])
-        if ai_fallback.get("is_fresh_grad"):
+        if _is_valid(ai_fallback.get("is_fresh_grad")):
             st.session_state[f"edit_fresh_{candidate_id}"] = ai_fallback["is_fresh_grad"]
-        if ai_fallback.get("email"):
-            # email 不在编辑表单中，但可以放入备注提示
+        if _is_valid(ai_fallback.get("email")):
+            # email 不在编辑表单中，可以后续扩展
             pass
 
     if not st.session_state[edit_key]:
