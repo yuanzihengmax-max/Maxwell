@@ -892,7 +892,7 @@ def main():
         with right_area:
             st.markdown(
                 "<p style='text-align: right; margin-top: 0.5rem;'>"
-                "销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v6.3</span>"
+                "销售岗位招聘管理系统 <span style='font-size: 0.7rem; color: #9CA3AF;'>v6.4</span>"
                 "</p>",
                 unsafe_allow_html=True
             )
@@ -1471,6 +1471,11 @@ def show_candidate_detail(candidate_id: int):
         st.warning("候选人不存在")
         return
 
+    # 预定义编辑模式 key，确保顶部按钮区可访问
+    edit_key = f"_edit_mode_{candidate_id}"
+    if edit_key not in st.session_state:
+        st.session_state[edit_key] = False
+
     name_col, ai_col, copy_col = st.columns([4, 1, 1])
     with name_col:
         st.subheader(f"{candidate['name'] or '未知'}")
@@ -1498,11 +1503,6 @@ def show_candidate_detail(candidate_id: int):
             _format_candidate_row(candidate),
             f"copy_btn_top_{candidate_id}"
         )
-
-    # ========== 编辑模式 ==========
-    edit_key = f"_edit_mode_{candidate_id}"
-    if edit_key not in st.session_state:
-        st.session_state[edit_key] = False
 
     # 应用AI fallback结果到编辑输入框（如果有）
     ai_fallback = st.session_state.pop(f"_ai_fallback_{candidate_id}", None)
