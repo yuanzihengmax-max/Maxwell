@@ -1470,9 +1470,28 @@ def show_candidate_detail(candidate_id: int):
         st.warning("候选人不存在")
         return
 
-    name_col, copy_col = st.columns([4, 1])
+    name_col, ai_col, copy_col = st.columns([4, 1, 1])
     with name_col:
         st.subheader(f"{candidate['name'] or '未知'}")
+    with ai_col:
+        if st.button("🤖 AI识别", key=f"ai_fallback_btn_{candidate_id}", help="用AI重新提取简历中的基本信息"):
+            raw_text = candidate.get("resume_raw_text", "")
+            if raw_text and modules.get("ai_analyzer"):
+                try:
+                    with st.spinner("AI识别中..."):
+                        ai_result = modules["ai_analyzer"].extract_missing_info(raw_text)
+                    if ai_result and isinstance(ai_result, dict):
+                        st.session_state[f"_ai_fallback_{candidate_id}"] = ai_result
+                        st.toast("AI识别完成，已预填入编辑模式", icon="🤖")
+                    else:
+                        st.toast("AI未返回有效结果", icon="⚠️")
+                except Exception as e:
+                    st.toast(f"AI识别失败: {e}", icon="❌")
+            else:
+                st.toast("无简历原文或AI未配置", icon="⚠️")
+            # 切换到编辑模式并刷新
+            st.session_state[edit_key] = True
+            st.rerun()
     with copy_col:
         _render_copy_button(
             _format_candidate_row(candidate),
@@ -1484,8 +1503,48 @@ def show_candidate_detail(candidate_id: int):
     if edit_key not in st.session_state:
         st.session_state[edit_key] = False
 
+    # 应用AI fallback结果到编辑输入框（如果有）
+    ai_fallback = st.session_state.pop(f"_ai_fallback_{candidate_id}", None)
+    if ai_fallback and isinstance(ai_fallback, dict):
+        edit_keys = [
+            f"edit_name_{candidate_id}",
+            f"edit_phone_{candidate_id}",
+            f"edit_school_{candidate_id}",
+            f"edit_major_{candidate_id}",
+            f"edit_edu_{candidate_id}",
+            f"edit_gender_{candidate_id}",
+            f"edit_birth_{candidate_id}",
+            f"edit_fresh_{candidate_id}",
+            f"edit_channel_{candidate_id}",
+            f"edit_intern_{candidate_id}",
+            f"edit_remarks_{candidate_id}",
+            f"edit_comm_time_{candidate_id}",
+            f"edit_desc_{candidate_id}",
+        ]
+        for key in edit_keys:
+            st.session_state.pop(key, None)
+        # 写入AI提取的值
+        if ai_fallback.get("name"):
+            st.session_state[f"edit_name_{candidate_id}"] = ai_fallback["name"]
+        if ai_fallback.get("phone"):
+            st.session_state[f"edit_phone_{candidate_id}"] = ai_fallback["phone"]
+        if ai_fallback.get("school"):
+            st.session_state[f"edit_school_{candidate_id}"] = ai_fallback["school"]
+        if ai_fallback.get("major"):
+            st.session_state[f"edit_major_{candidate_id}"] = ai_fallback["major"]
+        if ai_fallback.get("education"):
+            st.session_state[f"edit_edu_{candidate_id}"] = ai_fallback["education"]
+        if ai_fallback.get("gender"):
+            st.session_state[f"edit_gender_{candidate_id}"] = ai_fallback["gender"]
+        if ai_fallback.get("birth_year"):
+            st.session_state[f"edit_birth_{candidate_id}"] = str(ai_fallback["birth_year"])
+        if ai_fallback.get("is_fresh_grad"):
+            st.session_state[f"edit_fresh_{candidate_id}"] = ai_fallback["is_fresh_grad"]
+        if ai_fallback.get("email"):
+            # email 不在编辑表单中，但可以放入备注提示
+            pass
+
     if not st.session_state[edit_key]:
-        # 只读模式
         col1, col2 = st.columns(2)
         with col1:
             st.write(f"**手机：** {candidate['phone'] or '无'}")
@@ -1601,6 +1660,23 @@ def show_candidate_detail(candidate_id: int):
             with cancel_col:
                 if st.button("取消", key=f"cancel_edit_{candidate_id}", width="stretch"):
                     st.session_state[edit_key] = False
+                    # 取消时清除编辑输入框的值，下次编辑时恢复原始值
+                    for _key in [
+                        f"edit_name_{candidate_id}",
+                        f"edit_phone_{candidate_id}",
+                        f"edit_school_{candidate_id}",
+                        f"edit_major_{candidate_id}",
+                        f"edit_edu_{candidate_id}",
+                        f"edit_gender_{candidate_id}",
+                        f"edit_birth_{candidate_id}",
+                        f"edit_fresh_{candidate_id}",
+                        f"edit_channel_{candidate_id}",
+                        f"edit_intern_{candidate_id}",
+                        f"edit_remarks_{candidate_id}",
+                        f"edit_comm_time_{candidate_id}",
+                        f"edit_desc_{candidate_id}",
+                    ]:
+                        st.session_state.pop(_key, None)
                     st.rerun()
 
     # 台账描述
