@@ -18,6 +18,11 @@ from typing import Dict, Optional, Tuple, Union
 
 import pdfplumber
 
+try:
+    import fitz  # PyMuPDF，用于图片PDF的OCR
+except ImportError:
+    fitz = None
+
 
 class PDFParser:
     """
@@ -30,13 +35,98 @@ class PDFParser:
         print(info["phone"])  # 输出手机号
     """
 
-    def extract_text(self, pdf_source: Union[str, object]) -> str:
+    def _is_garbled_text(self, text: str) -> bool:
+        """检测提取的文字是否为乱码（图片PDF的特征）"""
+        if not text or len(text.strip()) < 20:
+            return True
+        # 统计中文字符数量
+        chinese_chars = len(re.findall(r'[一-龥]', text))
+        total_chars = len(re.sub(r'\s', '', text))
+        if total_chars == 0:
+            return True
+        return chinese_chars < 10 or (chinese_chars / total_chars) < 0.05
+
+    def _ocr_pages(self, pdf_source: Union[str, object], ai_analyzer) -> str:
+        """用视觉模型对PDF页面进行OCR，返回识别出的文字"""
+        if fitz is None:
+            return ""
+        if ai_analyzer is None or ai_analyzer.client is None:
+            return ""
+
+        try:
+            # 处理文件对象：写入临时文件
+            if hasattr(pdf_source, 'read') or hasattr(pdf_source, 'seek'):
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                    if hasattr(pdf_source, 'seek'):
+                        pdf_source.seek(0)
+                    content = pdf_source.read() if hasattr(pdf_source, 'read') else pdf_source
+                    tmp.write(content)
+                    tmp_path = tmp.name
+                try:
+                    doc = fitz.open(tmp_path)
+                finally:
+                    os.unlink(tmp_path)
+            else:
+                doc = fitz.open(pdf_source)
+
+            all_text = []
+            page_count = min(len(doc), 5)  # 最多处理5页
+
+            for page_idx in range(page_count):
+                page = doc[page_idx]
+                pix = page.get_pixmap(dpi=200)
+                img_bytes = pix.tobytes("jpeg")
+
+                mime_type = "image/jpeg"
+                b64_data = base64.b64encode(img_bytes).decode("utf-8")
+
+                response = ai_analyzer.client.chat.completions.create(
+                    model=ai_analyzer.model,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "这是一张简历PDF页面的截图，请用OCR方式提取页面上的所有文字内容。"
+                                    "要求：\n"
+                                    "1. 尽可能完整地提取所有中文字符和数字\n"
+                                    "2. 保留原文的结构和格式\n"
+                                    "3. 忽略乱码和无意义的字符\n"
+                                    "4. 直接返回提取的文字，不要加任何解释"
+                                )
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{mime_type};base64,{b64_data}"}
+                            }
+                        ]
+                    }],
+                    max_tokens=2000,
+                    temperature=0.0
+                )
+                page_text = response.choices[0].message.content.strip()
+                if page_text:
+                    all_text.append(page_text)
+
+            doc.close()
+            return "\n".join(all_text)
+
+        except Exception:
+            if 'doc' in dir():
+                try:
+                    doc.close()
+                except Exception:
+                    pass
+            return ""
+
+    def extract_text(self, pdf_source: Union[str, object], ai_analyzer=None) -> str:
         """
         从PDF中提取全部文字
 
         参数:
             pdf_source: 可以是文件路径（字符串），也可以是文件对象
-                        这样既能直接读电脑上的文件，也能处理网页上传的文件
+            ai_analyzer: AI分析器实例（用于图片PDF的OCR回退）
 
         返回:
             PDF里的所有文字，拼成一个大字符串
@@ -50,6 +140,13 @@ class PDFParser:
                         text += page_text + "\n"
         except Exception as e:
             raise RuntimeError(f"PDF解析失败，可能是文件损坏或不是PDF格式: {e}")
+
+        # 检测是否为图片PDF（文字层为乱码），尝试OCR回退
+        if self._is_garbled_text(text) and ai_analyzer and ai_analyzer.client:
+            ocr_text = self._ocr_pages(pdf_source, ai_analyzer)
+            if ocr_text and not self._is_garbled_text(ocr_text):
+                text = ocr_text
+
         return text
 
     def parse_resume(self, pdf_source: Union[str, object], ai_analyzer=None) -> Dict:
@@ -76,7 +173,7 @@ class PDFParser:
             }
             如果某项没提取到，对应的值就是 None 或 ""
         """
-        text = self.extract_text(pdf_source)
+        text = self.extract_text(pdf_source, ai_analyzer=ai_analyzer)
 
         result = {
             "name": self._extract_name(text),
@@ -525,7 +622,8 @@ class PDFParser:
         # 常见干扰词，这些不是人名
         excluded = {
             '简历', '求职', '应聘', '个人', '基本信息', '联系方式',
-            '教育背景', '工作经历', '自我评价', '专业技能', '项目经验',
+            '教育背景', '工作经历', '实习经历', '校园经历', '社团经历',
+            '获奖经历', '社会实践', '学生工作', '自我评价', '专业技能', '项目经验',
             '姓名', '电话', '邮箱', '学校', '专业', '学历', '性别', '年龄',
             '籍贯', '民族', '政治面貌', '身高', '体重', '婚姻', '现居',
             '期望', '薪资', '待遇', '到岗', '时间', '意向', '岗位', '职位',
