@@ -99,6 +99,18 @@ def load_user_config() -> dict:
         return {}
 
 
+def _normalize_model_name(model: str, base_url: str) -> str:
+    """自动修正常见的模型名称错误，例如 SiliconFlow 缺少 Qwen/ 前缀"""
+    if not model or not base_url:
+        return model
+    # 仅对 SiliconFlow 做 Qwen 系列模型前缀补全
+    if "siliconflow" in base_url.lower():
+        # Qwen3-VL / Qwen2.5-VL / Qwen-VL 系列没有 Qwen/ 前缀时自动补全
+        if model.startswith("Qwen") and not model.startswith("Qwen/"):
+            return "Qwen/" + model
+    return model
+
+
 def save_user_config(config: dict) -> None:
     """将用户配置持久化到文件"""
     path = _get_user_config_path()
@@ -106,6 +118,8 @@ def save_user_config(config: dict) -> None:
         k: v for k, v in config.items()
         if k in ("provider", "model", "api_key", "base_url", "resume_extract_prompt")
     }
+    # 自动修正模型名
+    data["model"] = _normalize_model_name(data.get("model", ""), data.get("base_url", ""))
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -150,6 +164,10 @@ def get_ai_config() -> dict:
     # 1. 优先取当前会话中的实时配置
     session_config = st.session_state.get("ai_config", {})
     if session_config.get("api_key") and session_config["api_key"] != "your-api-key-here":
+        # 实时修正模型名（如缺少 Qwen/ 前缀）
+        session_config["model"] = _normalize_model_name(
+            session_config.get("model", ""), session_config.get("base_url", "")
+        )
         return session_config
 
     # 2. 线上部署：从 Streamlit Secrets 读取
@@ -161,6 +179,7 @@ def get_ai_config() -> dict:
     # 3. 回退到用户配置文件（本地桌面版使用）
     user_cfg = load_user_config()
     if user_cfg.get("api_key") and user_cfg["api_key"] != "your-api-key-here":
+        user_cfg["model"] = _normalize_model_name(user_cfg.get("model", ""), user_cfg.get("base_url", ""))
         st.session_state["ai_config"] = user_cfg
         return user_cfg
 
