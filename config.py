@@ -62,7 +62,7 @@ EDUCATION_LEVELS = [
 # ========== AI配置 ==========
 AI_CONFIG = {
     "provider": "openai",
-    "model": "Qwen/Qwen3-VL-8B-Thinking",
+    "model": "Qwen/Qwen3-VL-8B-Instruct",
     "api_key": "sk-ltumqpkjpyrebbqwzajpwyqamwwvgjtlwpmuihxfuoavqacr",
     "base_url": "https://api.siliconflow.cn/v1"
 }
@@ -173,6 +173,7 @@ def get_ai_config() -> dict:
     # 2. 线上部署：从 Streamlit Secrets 读取
     secrets_cfg = _load_secrets_config()
     if secrets_cfg.get("api_key") and secrets_cfg["api_key"] != "your-api-key-here":
+        secrets_cfg["model"] = _normalize_model_name(secrets_cfg.get("model", ""), secrets_cfg.get("base_url", ""))
         st.session_state["ai_config"] = secrets_cfg
         return secrets_cfg
 

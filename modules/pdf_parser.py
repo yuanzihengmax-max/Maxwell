@@ -442,7 +442,7 @@ class PDFParser:
                     st.session_state["_gender_vision_error"] = (
                         f"当前模型 '{ai_analyzer.model}' 不支持图片识别，"
                         f"性别识别失败。建议切换到支持 vision 的模型，"
-                        f"如 Qwen/Qwen2.5-VL-72B-Instruct 或 gpt-4o-mini。"
+                        f"如 Qwen/Qwen3-VL-8B-Instruct 或 gpt-4o-mini。"
                     )
                 except Exception:
                     pass
