@@ -26,11 +26,6 @@ from modules.pdf_parser import PDFParser
 from modules.ai_analyzer import AIAnalyzer, DEFAULT_RESUME_EXTRACT_PROMPT
 from modules.database import Database
 from modules.excel_exporter import ExcelExporter
-from frontend_components import (
-    candidate_browser_component,
-    candidate_upload_component,
-    decode_component_files,
-)
 
 
 # ========== 自定义 CSS 样式 ==========
@@ -841,11 +836,9 @@ def get_modules():
 # ========== 主界面 ==========
 
 def main():
-    # ===== 全局状态初始化 =====
+    # ===== 用户标识（多用户隔离）=====
     if "user_id" not in st.session_state:
         st.session_state["user_id"] = ""
-    if "ui_theme" not in st.session_state:
-        st.session_state["ui_theme"] = "neutral"
 
     if not st.session_state["user_id"]:
         st.markdown(
@@ -936,45 +929,92 @@ def main():
 # ========== 标签页1：新增候选人 ==========
 
 def render_add_candidate():
-    """新增候选人页面（React Custom Component）"""
+    """新增候选人页面"""
     # 如果还有待审核的候选人，展示结果
     if st.session_state.get("pending_candidates"):
         show_pending_results()
         return
 
-    theme = st.session_state.get("ui_theme", "neutral")
-    is_processing = st.session_state.get("_upload_processing", False)
-
-    event = candidate_upload_component(
-        theme=theme,
-        is_processing=is_processing,
-        key="candidate_upload_main",
+    st.markdown("### 新增候选人")
+    st.markdown(
+        "<p class='secondary-text' style='margin-bottom: 1.5rem;'>"
+        "上传简历 → 输入电话纪要 → AI自动分析"
+        "</p>",
+        unsafe_allow_html=True
     )
 
-    if event and event.get("action") == "process_candidates":
-        st.session_state["_upload_processing"] = True
-        with st.spinner("正在处理候选人..."):
-            try:
-                files = decode_component_files(event)
-                transcripts = event.get("transcripts", {})
-                communicate_time = event.get("communicate_time", str(datetime.now().date()))
-                channel = event.get("channel", "BOSS直聘")
-                intern_name = event.get("intern_name", "")
-                process_candidates(files, transcripts, communicate_time, channel, intern_name)
-            except RuntimeError as e:
-                err_msg = str(e)
-                if "API密钥错误" in err_msg or "密钥" in err_msg:
-                    st.error("🔑 API 密钥无效，请前往「系统配置」页面检查。")
-                elif "AI服务出错" in err_msg:
-                    st.error("🤖 AI 服务暂时不可用，请稍后再试。")
-                elif "AI返回" in err_msg:
-                    st.error(f"📝 AI 返回异常：{err_msg}")
-                else:
-                    st.error(f"❌ 处理失败：{err_msg}")
-            except Exception as e:
-                st.error(f"❌ 处理失败：{e}")
-            finally:
-                st.session_state["_upload_processing"] = False
+    # 第一步：上传简历
+    with st.container(border=True):
+        st.markdown("#### 第一步：上传简历")
+        uploaded_files = st.file_uploader(
+            "拖拽或点击上传简历PDF文件",
+            type="pdf",
+            accept_multiple_files=True
+        )
+
+    if not uploaded_files:
+        st.info("请先上传简历PDF文件，支持同时上传多份")
+        return
+
+    # 第二步：输入电话纪要
+    with st.container(border=True):
+        st.markdown("#### 第二步：输入电话纪要")
+
+        phone_transcripts = {}
+        for file in uploaded_files:
+            name = file.name.replace(".pdf", "")
+            transcript = st.text_area(
+                f"候选人：**{name}**",
+                height=120,
+                key=f"transcript_{name}",
+                placeholder="请粘贴该候选人的电话面试纪要内容..."
+            )
+            phone_transcripts[name] = transcript
+
+    # 第三步：补充信息
+    with st.container(border=True):
+        st.markdown("#### 第三步：补充信息")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            communicate_date = st.date_input("沟通日期", datetime.now())
+        with col2:
+            channel = st.selectbox("招聘渠道", CHANNELS)
+
+        # 实习生姓名：优先用当前登录用户，记住最后一次输入
+        default_intern = st.session_state.get("user_id", "")
+        if "last_intern_name" not in st.session_state:
+            st.session_state["last_intern_name"] = default_intern
+        intern_name = st.text_input(
+            "跟进实习生",
+            value=st.session_state["last_intern_name"],
+            placeholder="请输入跟进此候选人的实习生姓名"
+        )
+        if intern_name != st.session_state.get("last_intern_name", ""):
+            st.session_state["last_intern_name"] = intern_name
+
+        communicate_datetime = str(communicate_date)
+
+    # 开始处理按钮
+    col_btn, _ = st.columns([1, 3])
+    with col_btn:
+        if st.button("开始分析处理", type="primary", width="stretch"):
+            with st.spinner("正在处理候选人..."):
+                try:
+                    process_candidates(uploaded_files, phone_transcripts,
+                                       communicate_datetime, channel, intern_name)
+                except RuntimeError as e:
+                    err_msg = str(e)
+                    if "API密钥错误" in err_msg or "密钥" in err_msg:
+                        st.error("🔑 API 密钥无效，请前往「系统配置」页面检查。")
+                    elif "AI服务出错" in err_msg:
+                        st.error("🤖 AI 服务暂时不可用，请稍后再试。")
+                    elif "AI返回" in err_msg:
+                        st.error(f"📝 AI 返回异常：{err_msg}")
+                    else:
+                        st.error(f"❌ 处理失败：{err_msg}")
+                except Exception as e:
+                    st.error(f"❌ 处理失败：{e}")
 
 
 def _extract_name_from_filename(filename: str) -> str:
@@ -1242,137 +1282,84 @@ def show_pending_results():
 # ========== 标签页2：历史记录 ==========
 
 def render_history():
-    """历史记录页面（React Custom Component）"""
+    """历史记录页面"""
+    st.markdown("### 历史记录")
+
     modules = get_modules()
-    theme = st.session_state.get("ui_theme", "neutral")
+
+    # 筛选和搜索
+    col1, col2, _ = st.columns([1, 1, 2])
+    with col1:
+        result_filter = st.selectbox("筛选结果", ["全部", "推荐", "淘汰", "待审核"])
+    with col2:
+        search_keyword = st.text_input("搜索姓名/手机")
+    st.divider()
 
     # 获取数据
     try:
-        candidates = modules["database"].get_all_candidates()
+        if search_keyword:
+            candidates = modules["database"].search_candidates(search_keyword)
+        elif result_filter and result_filter != "全部":
+            filter_val = None if result_filter == "待审核" else result_filter
+            candidates = modules["database"].get_all_candidates(filter_val)
+        else:
+            candidates = modules["database"].get_all_candidates()
     except Exception as e:
         st.error(f"查询失败: {e}")
         return
 
+    # 待审核筛选
+    if result_filter == "待审核":
+        candidates = [c for c in candidates if not c.get("result")]
+
+    # 统计卡片
+    if candidates:
+        total = len(candidates)
+        recommend = sum(1 for c in candidates if c.get("result") == "推荐")
+        eliminate = sum(1 for c in candidates if c.get("result") == "淘汰")
+        pending = sum(1 for c in candidates if not c.get("result"))
+
+        stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+        with stat_col1:
+            st.metric("总计", total)
+        with stat_col2:
+            st.metric("推荐", recommend)
+        with stat_col3:
+            st.metric("淘汰", eliminate)
+        with stat_col4:
+            st.metric("待审核", pending)
+
+    # 显示表格
     if not candidates:
         st.info("暂无数据")
         return
 
-    # 保持选中状态
-    selected_id_key = "_browser_selected_id"
-    selected_id = st.session_state.get(selected_id_key)
+    df_data = [{
+        "序号": c["id"],
+        "岗位": "销售代表",
+        "实习生": c.get("intern_name") or "—",
+        "沟通时间": c.get("communicate_time") or "—",
+        "姓名": c["name"] or "未识别",
+        "手机号": c["phone"] or "—",
+        "邮箱": c.get("email") or "—",
+        "性别": c.get("gender") or "—",
+        "出生年": c.get("birth_year") or "—",
+        "学校": c["school"] or "—",
+        "专业": c["major"] or "—",
+        "学历": c["education"] or "—",
+        "是否为应届生（2026届）": c.get("is_fresh_grad") or "—",
+        "招聘渠道": c.get("channel") or "—",
+        "推荐沟通情况": c.get("description") or "—",
+        "备注": c.get("remarks") or "—"
+    } for c in candidates]
 
-    event = candidate_browser_component(
-        candidates=candidates,
-        selected_id=selected_id,
-        theme=theme,
-        key="candidate_browser_main",
-    )
+    st.dataframe(df_data, width="stretch", hide_index=True)
 
-    if event:
-        action = event.get("action")
-        candidate_id = event.get("candidate_id")
-
-        if action == "select":
-            st.session_state[selected_id_key] = candidate_id
-            st.rerun()
-
-        elif action == "edit":
-            candidate = event.get("candidate", {})
-            try:
-                update_data = {
-                    "name": candidate.get("name", ""),
-                    "phone": candidate.get("phone", ""),
-                    "email": candidate.get("email", ""),
-                    "school": candidate.get("school", ""),
-                    "major": candidate.get("major", ""),
-                    "education": candidate.get("education", ""),
-                    "gender": candidate.get("gender", ""),
-                    "channel": candidate.get("channel", ""),
-                    "is_fresh_grad": candidate.get("is_fresh_grad", ""),
-                    "intern_name": candidate.get("intern_name", ""),
-                    "remarks": candidate.get("remarks", ""),
-                    "communicate_time": candidate.get("communicate_time", ""),
-                    "description": candidate.get("description", ""),
-                    "score_details": candidate.get("score_details", {}),
-                    "score_total": candidate.get("score_total", 0),
-                    "score_source": "manual",
-                }
-                birth_year = candidate.get("birth_year")
-                if birth_year:
-                    try:
-                        update_data["birth_year"] = int(birth_year)
-                    except (ValueError, TypeError):
-                        pass
-                modules["database"].update_candidate(candidate_id, update_data)
-                st.toast("✅ 保存成功", icon="✅")
-                st.rerun()
-            except Exception as e:
-                st.error(f"保存失败: {e}")
-
-        elif action == "delete":
-            try:
-                modules["database"].delete_candidate(candidate_id)
-                # 清除相关状态
-                if "pending_candidates" in st.session_state:
-                    st.session_state["pending_candidates"] = [
-                        c for c in st.session_state["pending_candidates"]
-                        if c.get("id") != candidate_id
-                    ]
-                st.toast("已删除", icon="🗑")
-                st.rerun()
-            except Exception as e:
-                st.error(f"删除失败: {e}")
-
-        elif action == "result_change":
-            result = event.get("result")
-            try:
-                modules["database"].update_candidate(candidate_id, {"result": result})
-                label = "推荐" if result == "推荐" else "淘汰" if result == "淘汰" else "待定"
-                st.toast(f"已标记为{label}", icon="✅")
-                st.rerun()
-            except Exception as e:
-                st.error(f"标记失败: {e}")
-
-        elif action == "reanalyze":
-            try:
-                candidate = modules["database"].get_candidate(candidate_id)
-                if not candidate:
-                    st.warning("候选人不存在")
-                    return
-                raw_text = candidate.get("resume_raw_text", "")
-                if raw_text and modules.get("ai_analyzer"):
-                    with st.spinner("AI识别中..."):
-                        custom_prompt = get_ai_config().get("resume_extract_prompt")
-                        ai_result = modules["ai_analyzer"].extract_missing_info(raw_text, custom_prompt=custom_prompt)
-                    if ai_result and isinstance(ai_result, dict):
-                        field_labels = {
-                            "name": "姓名", "phone": "手机", "email": "邮箱",
-                            "gender": "性别", "birth_year": "出生年份",
-                            "school": "学校", "major": "专业",
-                            "education": "学历", "is_fresh_grad": "是否应届"
-                        }
-                        found = []
-                        update_data = {}
-                        for field, label in field_labels.items():
-                            val = ai_result.get(field)
-                            if val and str(val).lower() not in ("null", "none", "", "未识别"):
-                                found.append(f"{label}: {val}")
-                                update_data[field] = val
-                        if update_data:
-                            modules["database"].update_candidate(candidate_id, update_data)
-                        if found:
-                            st.toast("✅ AI识别完成\\n" + "\\n".join(found), icon="🤖")
-                        else:
-                            st.toast("⚠️ AI识别完成，但未提取到新信息", icon="🤖")
-                    else:
-                        st.toast("AI未返回有效结果", icon="⚠️")
-                else:
-                    st.toast("无简历原文或AI未配置", icon="⚠️")
-            except Exception as e:
-                st.toast(f"AI识别失败: {e}", icon="❌")
-
-        elif action == "export":
-            st.info("导出功能开发中，请使用「台账导出」页面")
+    # 查看详情
+    st.divider()
+    selected_id = st.selectbox("选择候选人查看详情", [c["id"] for c in candidates])
+    if selected_id:
+        show_candidate_detail(selected_id)
 
 
 def _format_candidate_row(c: dict) -> str:
@@ -1966,25 +1953,6 @@ def render_settings():
                 else:
                     st.error("用户标识不能为空")
 
-    # ===== 界面设置 =====
-    with st.container(border=True):
-        st.markdown("#### 界面设置")
-        theme_options = ["neutral", "moss"]
-        theme_labels = {"neutral": "中性化重塑（深灰色）", "moss": "苔藓庭院（暖色调）"}
-        current_theme = st.session_state.get("ui_theme", "neutral")
-        new_theme = st.radio(
-            "主题配色",
-            options=theme_options,
-            format_func=lambda x: theme_labels[x],
-            index=theme_options.index(current_theme),
-            key="_theme_selector",
-            horizontal=True,
-        )
-        if new_theme != current_theme:
-            st.session_state["ui_theme"] = new_theme
-            st.toast(f"已切换到 {theme_labels[new_theme]}", icon="🎨")
-            st.rerun()
-
     # 读取当前配置（session_state → 用户文件 → 默认值）
     current = get_ai_config()
 
@@ -2040,7 +2008,7 @@ def render_settings():
             value=st.session_state["cfg_model_val"],
             key="cfg_model_input",
             placeholder="gpt-4o-mini",
-            help="例如：gpt-4o-mini、Qwen/Qwen2.5-72B-Instruct、qwen-plus"
+            help="例如：gpt-4o-mini、Qwen/Qwen3-VL-8B-Instruct"
         )
         # 同步回 session_state
         if model != st.session_state.get("cfg_model_val", ""):
